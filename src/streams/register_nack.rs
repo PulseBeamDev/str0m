@@ -3,7 +3,8 @@ use std::ops::Range;
 use crate::rtp_::{Nack, NackEntry, ReportList, SeqNo};
 
 /// Number of out of order packets we keep track of for reports
-const MAX_MISORDER: u64 = 100;
+/// Increased for better handling of transatlantic connections
+const MAX_MISORDER: u64 = 200;
 
 const U16_MAX: u64 = u16::MAX as u64 + 1_u64;
 
@@ -12,6 +13,9 @@ const MAX_NACKS: u8 = 5;
 
 /// Circular buffer size
 const BUFFER_SIZE: u64 = MAX_MISORDER + 1;
+
+/// Delay before considering a packet truly lost (in number of subsequent packets)
+const NACK_THRESHOLD: u64 = 3;
 
 #[derive(Debug)]
 pub struct NackRegister {
@@ -69,7 +73,8 @@ impl<'a> Iterator for NackIterator<'a> {
         for (i, s) in (self.next..self.end).take(16).enumerate() {
             let packet = self.reg.packet_mut(s.into());
             if packet.needs_nack() {
-                self.reg.packet_mut(self.next.into()).nack_count += 1;
+                // FIX: Increment nack count for the actual packet being NACKed
+                self.reg.packet_mut(s.into()).nack_count += 1;
                 entry.blp |= 1 << i
             }
             self.next += 1;
@@ -128,19 +133,30 @@ impl NackRegister {
 
         let end = active.end.max(seq);
 
+        // FIX: Only advance window start if we have received enough subsequent packets
+        // This prevents premature eviction of delayed packets
         let start: SeqNo = {
             let min = end.saturating_sub(MAX_MISORDER);
-            let mut start = (*active.start).max(min);
-            while start < *end {
-                if !self.packet_mut(start.into()).received && start != *seq {
-                    break;
+            let forced_start = (*active.start).max(min);
+
+            // Find the first unreceived packet, but only advance if we're past the threshold
+            let mut start = *active.start;
+
+            // Only advance if the current end is far enough ahead
+            if *end > *active.start + NACK_THRESHOLD {
+                while start < *end - NACK_THRESHOLD {
+                    if !self.packet_mut(start.into()).received {
+                        break;
+                    }
+                    start += 1;
                 }
-                start += 1;
             }
-            start.into()
+
+            // Respect the minimum bound to prevent the window from growing too large
+            start.max(forced_start).into()
         };
 
-        // reset packets that are rolling our of the nack window
+        // reset packets that are rolling out of the nack window
         for (i, s) in (*active.start..*start).enumerate() {
             let p = self.packet_mut(s.into());
             if !p.received && s != *seq {
@@ -177,13 +193,22 @@ impl NackRegister {
     /// This modifies the state as it counts how many times packets have been nacked
     pub fn nack_reports(&mut self) -> Option<impl Iterator<Item = Nack>> {
         let Range { start, end } = self.active.clone()?;
-        let start = (*start..=*end).find(|s| self.packet_mut((*s).into()).needs_nack())?;
+
+        // FIX: Only generate NACKs for packets that are sufficiently behind
+        // This prevents NACKing packets that are just slightly out of order
+        let nack_end = (*end).saturating_sub(NACK_THRESHOLD);
+
+        if nack_end <= *start {
+            return None;
+        }
+
+        let start = (*start..=nack_end).find(|s| self.packet_mut((*s).into()).needs_nack())?;
 
         Some(
             ReportList::lists_from_iter(NackIterator {
                 reg: self,
                 next: start,
-                end: *end,
+                end: nack_end,
             })
             .into_iter()
             .map(|reports| {
