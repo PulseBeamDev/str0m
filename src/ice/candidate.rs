@@ -227,47 +227,6 @@ impl Candidate {
         ))
     }
 
-    /// Creates a host tcp ICE candidate. Similar to [`Self::host`] except it includes
-    /// `tcptype` extension to define the candidate's tcp role.
-    /// Specifying `None` is usually used to respond to an offer, and the
-    /// meaning is application dependent.
-    ///
-    /// e.g. if the offer includes "active" tcptype, the answerer may respond with None, but
-    /// assuming either "passive" or "so" role.
-    ///
-    /// Host candidates are local sockets directly on the host.
-    pub fn host_tcp(
-        addr: SocketAddr,
-        proto: impl TryInto<Protocol>,
-        tcptype: Option<TcpType>,
-    ) -> Result<Self, IceError> {
-        if !is_valid_ip(addr.ip()) {
-            return Err(IceError::BadCandidate(format!("invalid ip {}", addr.ip())));
-        }
-
-        let proto = parse_proto(proto)?;
-        if proto == Protocol::Udp {
-            return Err(IceError::BadCandidate(format!(
-                "only tcp based candidate is allowed: {}",
-                proto
-            )));
-        }
-
-        Ok(Candidate::new(
-            None,
-            1, // only RTP
-            proto,
-            None,
-            addr,
-            Some(addr),
-            CandidateKind::Host,
-            None,
-            tcptype,
-            None,
-            addr,
-        ))
-    }
-
     /// Creates a server reflexive ICE candidate.
     ///
     /// Server reflexive candidates are local sockets mapped to external ip discovered
@@ -824,34 +783,6 @@ impl<P> CandidateBuilder<P, Init> {
 
 // Step 3: General Configurations
 impl<P> CandidateBuilder<P, Ready> {
-    pub fn ufrag(mut self, ufrag: impl Into<String>) -> Self {
-        self.ufrag = Some(ufrag.into());
-        self
-    }
-
-    /// RFC 8445 Section 5.1.2: Priority MUST be 1 to 2^31-1.
-    pub fn priority(mut self, p: u32) -> Result<Self, IceError> {
-        if p == 0 || p > 2_147_483_647 {
-            return Err(IceError::BadCandidate(
-                "Priority must be between 1 and 2^31-1".into(),
-            ));
-        }
-        self.prio = Some(p);
-        Ok(self)
-    }
-
-    /// RFC 8445 Section 15.1: Foundation is 1-32 chars.
-    pub fn foundation(mut self, f: impl Into<String>) -> Result<Self, IceError> {
-        let f = f.into();
-        if f.is_empty() || f.len() > 32 {
-            return Err(IceError::BadCandidate(
-                "Foundation length must be 1-32".into(),
-            ));
-        }
-        self.foundation = Some(f);
-        Ok(self)
-    }
-
     pub fn build(self) -> Result<Candidate, IceError> {
         let addr = self.addr.expect("Logic error: addr missing in Ready state");
 
@@ -901,7 +832,12 @@ mod tests {
         let candidates = [
             Candidate::host(socket_addr, Protocol::Udp).unwrap(),
             Candidate::host(socket_addr, Protocol::Tcp).unwrap(),
-            Candidate::host_tcp(socket_addr, Protocol::Tcp, Some(TcpType::Passive)).unwrap(),
+            Candidate::builder()
+                .tcp()
+                .host(socket_addr)
+                .tcptype(TcpType::Passive)
+                .build()
+                .unwrap(),
         ];
 
         for c1 in &candidates {
@@ -1030,15 +966,31 @@ mod tests {
     #[test]
     fn tcp_candidates_sanity() {
         let socket_addr = "1.2.3.4:9876".parse().unwrap();
-        assert!(Candidate::host_tcp(socket_addr, Protocol::Udp, None).is_err());
-
-        let socket_addr = "1.2.3.4:9876".parse().unwrap();
         let candidates = [
             Candidate::host(socket_addr, Protocol::Tcp).unwrap(),
-            Candidate::host_tcp(socket_addr, Protocol::Tcp, None).unwrap(),
-            Candidate::host_tcp(socket_addr, Protocol::Tcp, Some(TcpType::Passive)).unwrap(),
-            Candidate::host_tcp(socket_addr, Protocol::SslTcp, Some(TcpType::Active)).unwrap(),
-            Candidate::host_tcp(socket_addr, Protocol::Tls, Some(TcpType::So)).unwrap(),
+            Candidate::builder()
+                .tcp()
+                .host(socket_addr)
+                .build()
+                .unwrap(),
+            Candidate::builder()
+                .tcp()
+                .host(socket_addr)
+                .tcptype(TcpType::Passive)
+                .build()
+                .unwrap(),
+            Candidate::builder()
+                .ssl_tcp()
+                .host(socket_addr)
+                .tcptype(TcpType::Active)
+                .build()
+                .unwrap(),
+            Candidate::builder()
+                .tls()
+                .host(socket_addr)
+                .tcptype(TcpType::So)
+                .build()
+                .unwrap(),
         ];
 
         assert!(!candidates[0].to_sdp_string().contains("tcptype"));
