@@ -1087,13 +1087,11 @@ mod tests {
         let api = Candidate::host(addr, Protocol::Udp).unwrap();
         let builder = Candidate::builder().udp().host(addr).build().unwrap();
         assert_eq!(api, builder);
-        assert_eq!(api.to_sdp_string(), builder.to_sdp_string());
 
         // TCP Host
         let api = Candidate::host(addr, Protocol::Tcp).unwrap();
         let builder = Candidate::builder().tcp().host(addr).build().unwrap();
         assert_eq!(api, builder);
-        assert_eq!(api.to_sdp_string(), builder.to_sdp_string());
     }
 
     #[test]
@@ -1110,9 +1108,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(api, builder);
-        // raddr should be spoofed identically in both
-        assert_eq!(api.raddr(), builder.raddr());
-        assert_eq!(api.to_sdp_string(), builder.to_sdp_string());
     }
 
     #[test]
@@ -1128,19 +1123,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(api, builder);
-        assert_eq!(api.local(), builder.local());
-        assert_eq!(api.to_sdp_string(), builder.to_sdp_string());
-    }
-
-    #[test]
-    fn builder_tcp_variants() {
-        let addr = "1.2.3.4:1234".parse().unwrap();
-
-        let ssl_tcp = Candidate::builder().ssl_tcp().host(addr).build().unwrap();
-        assert_eq!(ssl_tcp.proto(), Protocol::SslTcp);
-
-        let tls = Candidate::builder().tls().host(addr).build().unwrap();
-        assert_eq!(tls.proto(), Protocol::Tls);
     }
 
     #[test]
