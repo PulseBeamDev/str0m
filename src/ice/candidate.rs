@@ -122,7 +122,28 @@ impl fmt::Debug for Candidate {
 }
 
 impl Candidate {
-    /// Entry point for the builder.
+    /// Starts the typesafe builder pattern.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use str0m::{Candidate, Protocol, TcpType};
+    /// # use std::net::SocketAddr;
+    /// let addr: SocketAddr = "192.168.1.1:12345".parse().unwrap();
+    ///
+    /// // A standard UDP Host candidate
+    /// let udp_host = Candidate::builder()
+    ///     .udp()
+    ///     .host(addr)
+    ///     .build()?;
+    ///
+    /// // A TCP Relayed candidate with a specific role
+    /// let tcp_relay = Candidate::builder()
+    ///     .tcp()
+    ///     .relayed(addr, "10.0.0.1:443".parse().unwrap())
+    ///     .tcptype(TcpType::Active)
+    ///     .build()?;
+    /// ```
     pub fn builder() -> CandidateBuilder<NoProtocol, Init> {
         CandidateBuilder {
             foundation: None,
@@ -658,14 +679,21 @@ impl<'de> Deserialize<'de> for Candidate {
     }
 }
 
+/// Marker for a builder requiring a protocol selection.
 pub struct NoProtocol;
+/// Marker for a builder using the UDP protocol.
 pub struct Udp;
+/// Marker for a builder using a TCP-based protocol.
 pub struct Tcp;
-
+/// Marker for a builder requiring an address and kind selection.
 pub struct Init;
+/// Marker for a builder that is ready to be finalized.
 pub struct Ready;
 
-/// A typesafe builder for [Candidate].
+/// A typesafe builder for constructing a [`Candidate`].
+///
+/// This builder uses the Type State Pattern to enforce correct construction order and
+/// protocol-specific constraints (such as preventing `tcptype` on UDP).
 pub struct CandidateBuilder<P, S> {
     foundation: Option<String>,
     component_id: u16,
@@ -684,18 +712,22 @@ pub struct CandidateBuilder<P, S> {
 
 // Step 1: Protocol Selection
 impl CandidateBuilder<NoProtocol, Init> {
+    /// Sets the protocol to UDP.
     pub fn udp(self) -> CandidateBuilder<Udp, Init> {
         self.into_protocol(Some(Protocol::Udp))
     }
 
+    /// Sets the protocol to standard TCP.
     pub fn tcp(self) -> CandidateBuilder<Tcp, Init> {
         self.into_protocol(Some(Protocol::Tcp))
     }
 
+    /// Sets the protocol to SSL-over-TCP.
     pub fn ssl_tcp(self) -> CandidateBuilder<Tcp, Init> {
         self.into_protocol(Some(Protocol::SslTcp))
     }
 
+    /// Sets the protocol to TLS.
     pub fn tls(self) -> CandidateBuilder<Tcp, Init> {
         self.into_protocol(Some(Protocol::Tls))
     }
@@ -703,6 +735,7 @@ impl CandidateBuilder<NoProtocol, Init> {
     fn into_protocol<NewP>(self, p: Option<Protocol>) -> CandidateBuilder<NewP, Init> {
         CandidateBuilder {
             proto: p,
+            _marker: PhantomData,
             foundation: self.foundation,
             component_id: self.component_id,
             prio: self.prio,
@@ -714,26 +747,26 @@ impl CandidateBuilder<NoProtocol, Init> {
             ufrag: self.ufrag,
             local: self.local,
             local_preference: self.local_preference,
-            _marker: PhantomData,
         }
     }
 }
 
-// Step 2: Candidate Type
+// Step 2: Kind Selection
 impl<P> CandidateBuilder<P, Init> {
+    /// Configures as a Host candidate.
     pub fn host(self, addr: SocketAddr) -> CandidateBuilder<P, Ready> {
         self.into_ready(CandidateKind::Host, addr, Some(addr), Some(addr), None)
     }
 
+    /// Configures as a Server Reflexive (STUN) candidate.
+    /// Returns error if `addr` and `base` are different IP versions.
     pub fn server_reflexive(
         self,
         addr: SocketAddr,
         base: SocketAddr,
     ) -> Result<CandidateBuilder<P, Ready>, IceError> {
         if addr.is_ipv4() != base.is_ipv4() {
-            return Err(IceError::BadCandidate(
-                "IP version mismatch between addr and base".into(),
-            ));
+            return Err(IceError::BadCandidate("IP version mismatch".into()));
         }
         Ok(self.into_ready(
             CandidateKind::ServerReflexive,
@@ -744,8 +777,9 @@ impl<P> CandidateBuilder<P, Init> {
         ))
     }
 
+    /// Configures as a Relayed (TURN) candidate.
+    /// Base is set to `addr`, and `local` is the interface address.
     pub fn relayed(self, addr: SocketAddr, local: SocketAddr) -> CandidateBuilder<P, Ready> {
-        // RFC 8445: Relay candidates require a related address (spoofed for privacy)
         self.into_ready(
             CandidateKind::Relayed,
             addr,
@@ -770,50 +804,44 @@ impl<P> CandidateBuilder<P, Init> {
             local,
             raddr,
             proto: self.proto,
-            foundation: self.foundation,
-            component_id: self.component_id,
-            prio: self.prio,
-            tcptype: self.tcptype,
-            ufrag: self.ufrag,
-            local_preference: self.local_preference,
             _marker: PhantomData,
-        }
-    }
-}
-
-// Step 3: General Configurations
-impl<P> CandidateBuilder<P, Ready> {
-    pub fn build(self) -> Result<Candidate, IceError> {
-        let addr = self.addr.expect("Logic error: addr missing in Ready state");
-
-        if !is_valid_ip(addr.ip()) {
-            return Err(IceError::BadCandidate(format!(
-                "Invalid IP address: {}",
-                addr.ip()
-            )));
-        }
-
-        Ok(Candidate {
             foundation: self.foundation,
             component_id: self.component_id,
-            proto: self.proto.expect("Logic error: proto missing"),
             prio: self.prio,
-            addr,
-            base: self.base,
-            kind: self.kind.expect("Logic error: kind missing"),
             tcptype: self.tcptype,
-            raddr: self.raddr,
             ufrag: self.ufrag,
-            local: self.local.expect("Logic error: local missing"),
             local_preference: self.local_preference,
-            discarded: false,
-        })
+        }
     }
 }
 
-// TCP Based Configurations only
+// Step 3: Final General Configurations and Build
+impl<P> CandidateBuilder<P, Ready> {
+    /// Consumes the builder and returns a [`Candidate`].
+    pub fn build(self) -> Result<Candidate, IceError> {
+        let addr = self.addr.expect("addr missing");
+        if !is_valid_ip(addr.ip()) {
+            return Err(IceError::BadCandidate(format!("Invalid IP: {}", addr.ip())));
+        }
+
+        Ok(Candidate::new(
+            self.foundation,
+            self.component_id,
+            self.proto.expect("proto missing"),
+            self.prio,
+            addr,
+            self.base,
+            self.kind.expect("kind missing"),
+            self.raddr,
+            self.tcptype,
+            self.ufrag,
+            self.local.expect("local missing"),
+        ))
+    }
+}
+
 impl CandidateBuilder<Tcp, Ready> {
-    /// RFC 6544: define tcp role
+    /// Configures the TCP type (active, passive, so).
     pub fn tcptype(mut self, t: TcpType) -> Self {
         self.tcptype = Some(t);
         self
