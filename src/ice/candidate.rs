@@ -66,16 +66,16 @@ impl CandidateBuilder<NoProtocol, Init> {
         self.into_protocol(Some(Protocol::Udp))
     }
 
-    pub fn tcp(self) -> Result<CandidateBuilder<Tcp, Init>, IceError> {
-        Ok(self.into_protocol(Some(Protocol::Tcp)))
+    pub fn tcp(self) -> CandidateBuilder<Tcp, Init> {
+        self.into_protocol(Some(Protocol::Tcp))
     }
 
-    pub fn ssl_tcp(self) -> Result<CandidateBuilder<Tcp, Init>, IceError> {
-        Ok(self.into_protocol(Some(Protocol::SslTcp)))
+    pub fn ssl_tcp(self) -> CandidateBuilder<Tcp, Init> {
+        self.into_protocol(Some(Protocol::SslTcp))
     }
 
-    pub fn tls(self) -> Result<CandidateBuilder<Tcp, Init>, IceError> {
-        Ok(self.into_protocol(Some(Protocol::Tls)))
+    pub fn tls(self) -> CandidateBuilder<Tcp, Init> {
+        self.into_protocol(Some(Protocol::Tls))
     }
 
     fn into_protocol<NewP>(self, p: Option<Protocol>) -> CandidateBuilder<NewP, Init> {
@@ -901,6 +901,8 @@ impl<'de> Deserialize<'de> for Candidate {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
 
     #[test]
@@ -1089,6 +1091,27 @@ mod tests {
             error.to_string(),
             "ICE bad candidate: addr and base are different IP versions"
         );
+    }
+
+    #[test]
+    fn candidate_builder() -> Result<(), Box<dyn Error>> {
+        Candidate::builder()
+            .udp()
+            .server_reflexive(
+                "10.0.0.1:1000".parse().unwrap(),
+                "[::1]:1000".parse().unwrap(),
+            )?
+            .build()?;
+
+        Candidate::builder()
+            .tcp()
+            .server_reflexive(
+                "10.0.0.1:1000".parse().unwrap(),
+                "[::1]:1000".parse().unwrap(),
+            )?
+            .tcptype(TcpType::Passive)
+            .build()?;
+        Ok(())
     }
 
     fn host(socket: &str) -> String {
