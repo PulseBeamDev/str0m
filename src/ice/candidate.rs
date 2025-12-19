@@ -6,7 +6,229 @@ use serde::{Deserialize, Serialize, Serializer};
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::net::{IpAddr, SocketAddr};
+
+// --- Marker Types ---
+pub struct NoProtocol;
+pub struct Udp;
+pub struct Tcp;
+
+pub struct Init;
+pub struct Ready;
+
+/// A typesafe builder for [Candidate].
+///
+/// Enforces RFC 8445 and RFC 6544 rules:
+/// - `tcptype` is only available for TCP candidates.
+/// - Mandatory addresses for reflexive/relay are enforced.
+/// - Priority and Foundation limits are checked.
+pub struct CandidateBuilder<P, S> {
+    foundation: Option<String>,
+    component_id: u16,
+    proto: Option<Protocol>,
+    prio: Option<u32>,
+    addr: Option<SocketAddr>,
+    base: Option<SocketAddr>,
+    kind: Option<CandidateKind>,
+    tcptype: Option<TcpType>,
+    raddr: Option<SocketAddr>,
+    ufrag: Option<String>,
+    local: Option<SocketAddr>,
+    local_preference: Option<u32>,
+    _marker: PhantomData<(P, S)>,
+}
+
+impl Candidate {
+    /// Entry point for the builder.
+    pub fn builder() -> CandidateBuilder<NoProtocol, Init> {
+        CandidateBuilder {
+            foundation: None,
+            component_id: 1, // Default RTP
+            proto: None,
+            prio: None,
+            addr: None,
+            base: None,
+            kind: None,
+            tcptype: None,
+            raddr: None,
+            ufrag: None,
+            local: None,
+            local_preference: None,
+            _marker: PhantomData,
+        }
+    }
+}
+
+// --- Protocol Selection (Step 1) ---
+impl CandidateBuilder<NoProtocol, Init> {
+    pub fn udp(self) -> CandidateBuilder<Udp, Init> {
+        self.into_protocol(Some(Protocol::Udp))
+    }
+
+    /// Set a TCP-based protocol (TCP, SslTcp, Tls).
+    pub fn tcp(
+        self,
+        proto: impl TryInto<Protocol>,
+    ) -> Result<CandidateBuilder<Tcp, Init>, IceError> {
+        let p = parse_proto(proto)?;
+        if p == Protocol::Udp {
+            return Err(IceError::BadCandidate(
+                "Use .udp() for UDP candidates".into(),
+            ));
+        }
+        Ok(self.into_protocol(Some(p)))
+    }
+
+    fn into_protocol<NewP>(self, p: Option<Protocol>) -> CandidateBuilder<NewP, Init> {
+        CandidateBuilder {
+            proto: p,
+            foundation: self.foundation,
+            component_id: self.component_id,
+            prio: self.prio,
+            addr: self.addr,
+            base: self.base,
+            kind: self.kind,
+            tcptype: self.tcptype,
+            raddr: self.raddr,
+            ufrag: self.ufrag,
+            local: self.local,
+            local_preference: self.local_preference,
+            _marker: PhantomData,
+        }
+    }
+}
+
+// --- Kind Selection (Step 2) ---
+// This logic is shared for both Udp and Tcp protocols.
+impl<P> CandidateBuilder<P, Init> {
+    pub fn host(self, addr: SocketAddr) -> CandidateBuilder<P, Ready> {
+        self.into_ready(CandidateKind::Host, addr, Some(addr), Some(addr), None)
+    }
+
+    pub fn server_reflexive(
+        self,
+        addr: SocketAddr,
+        base: SocketAddr,
+    ) -> Result<CandidateBuilder<P, Ready>, IceError> {
+        if addr.is_ipv4() != base.is_ipv4() {
+            return Err(IceError::BadCandidate(
+                "IP version mismatch between addr and base".into(),
+            ));
+        }
+        Ok(self.into_ready(
+            CandidateKind::ServerReflexive,
+            addr,
+            Some(base),
+            Some(base),
+            Some(Candidate::arbitrary_raddr(addr)),
+        ))
+    }
+
+    pub fn relayed(self, addr: SocketAddr, local: SocketAddr) -> CandidateBuilder<P, Ready> {
+        // RFC 8445: Relay candidates require a related address (spoofed for privacy)
+        self.into_ready(
+            CandidateKind::Relayed,
+            addr,
+            Some(addr),
+            Some(local),
+            Some(Candidate::arbitrary_raddr(addr)),
+        )
+    }
+
+    fn into_ready(
+        self,
+        kind: CandidateKind,
+        addr: SocketAddr,
+        base: Option<SocketAddr>,
+        local: Option<SocketAddr>,
+        raddr: Option<SocketAddr>,
+    ) -> CandidateBuilder<P, Ready> {
+        CandidateBuilder {
+            kind: Some(kind),
+            addr: Some(addr),
+            base,
+            local,
+            raddr,
+            proto: self.proto,
+            foundation: self.foundation,
+            component_id: self.component_id,
+            prio: self.prio,
+            tcptype: self.tcptype,
+            ufrag: self.ufrag,
+            local_preference: self.local_preference,
+            _marker: PhantomData,
+        }
+    }
+}
+
+// --- General Configuration (Step 3: Ready State) ---
+impl<P> CandidateBuilder<P, Ready> {
+    pub fn ufrag(mut self, ufrag: impl Into<String>) -> Self {
+        self.ufrag = Some(ufrag.into());
+        self
+    }
+
+    /// RFC 8445 Section 5.1.2: Priority MUST be 1 to 2^31-1.
+    pub fn priority(mut self, p: u32) -> Result<Self, IceError> {
+        if p == 0 || p > 2_147_483_647 {
+            return Err(IceError::BadCandidate(
+                "Priority must be between 1 and 2^31-1".into(),
+            ));
+        }
+        self.prio = Some(p);
+        Ok(self)
+    }
+
+    /// RFC 8445 Section 15.1: Foundation is 1-32 chars.
+    pub fn foundation(mut self, f: impl Into<String>) -> Result<Self, IceError> {
+        let f = f.into();
+        if f.is_empty() || f.len() > 32 {
+            return Err(IceError::BadCandidate(
+                "Foundation length must be 1-32".into(),
+            ));
+        }
+        self.foundation = Some(f);
+        Ok(self)
+    }
+
+    pub fn build(self) -> Result<Candidate, IceError> {
+        let addr = self.addr.expect("Logic error: addr missing in Ready state");
+
+        if !is_valid_ip(addr.ip()) {
+            return Err(IceError::BadCandidate(format!(
+                "Invalid IP address: {}",
+                addr.ip()
+            )));
+        }
+
+        Ok(Candidate {
+            foundation: self.foundation,
+            component_id: self.component_id,
+            proto: self.proto.expect("Logic error: proto missing"),
+            prio: self.prio,
+            addr,
+            base: self.base,
+            kind: self.kind.expect("Logic error: kind missing"),
+            tcptype: self.tcptype,
+            raddr: self.raddr,
+            ufrag: self.ufrag,
+            local: self.local.expect("Logic error: local missing"),
+            local_preference: self.local_preference,
+            discarded: false,
+        })
+    }
+}
+
+// --- TCP-Only Methods ---
+impl CandidateBuilder<Tcp, Ready> {
+    /// RFC 6544: tcptype is only for TCP candidates.
+    /// This method is NOT visible/callable if .udp() was used.
+    pub fn tcptype(mut self, t: TcpType) -> Self {
+        self.tcptype = Some(t);
+        self
+    }
+}
 
 /// ICE candidates are network addresses used to connect to a peer.
 ///
