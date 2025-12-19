@@ -66,18 +66,16 @@ impl CandidateBuilder<NoProtocol, Init> {
         self.into_protocol(Some(Protocol::Udp))
     }
 
-    /// Set a TCP-based protocol (TCP, SslTcp, Tls).
-    pub fn tcp(
-        self,
-        proto: impl TryInto<Protocol>,
-    ) -> Result<CandidateBuilder<Tcp, Init>, IceError> {
-        let p = parse_proto(proto)?;
-        if p == Protocol::Udp {
-            return Err(IceError::BadCandidate(
-                "Use .udp() for UDP candidates".into(),
-            ));
-        }
-        Ok(self.into_protocol(Some(p)))
+    pub fn tcp(self) -> Result<CandidateBuilder<Tcp, Init>, IceError> {
+        Ok(self.into_protocol(Some(Protocol::Tcp)))
+    }
+
+    pub fn ssl_tcp(self) -> Result<CandidateBuilder<Tcp, Init>, IceError> {
+        Ok(self.into_protocol(Some(Protocol::SslTcp)))
+    }
+
+    pub fn tls(self) -> Result<CandidateBuilder<Tcp, Init>, IceError> {
+        Ok(self.into_protocol(Some(Protocol::Tls)))
     }
 
     fn into_protocol<NewP>(self, p: Option<Protocol>) -> CandidateBuilder<NewP, Init> {
