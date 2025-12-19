@@ -122,7 +122,7 @@ impl fmt::Debug for Candidate {
 }
 
 impl Candidate {
-    /// Starts the typesafe builder pattern.
+    /// Starts the typesafe builder.
     ///
     /// # Example
     ///
@@ -137,11 +137,11 @@ impl Candidate {
     ///     .host(addr)
     ///     .build()?;
     ///
-    /// // A TCP Relayed candidate with a specific role
-    /// let tcp_relay = Candidate::builder()
+    /// // A TCP Host candidate with a passive role
+    /// let tcp_host = Candidate::builder()
     ///     .tcp()
-    ///     .relayed(addr, "10.0.0.1:443".parse().unwrap())
-    ///     .tcptype(TcpType::Active)
+    ///     .host(addr)
+    ///     .tcptype(TcpType::Passive)
     ///     .build()?;
     /// ```
     pub fn builder() -> CandidateBuilder<NoProtocol, Init> {
@@ -850,8 +850,6 @@ impl CandidateBuilder<Tcp, Ready> {
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
-
     use super::*;
 
     #[test]
@@ -1063,27 +1061,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn candidate_builder() -> Result<(), Box<dyn Error>> {
-        Candidate::builder()
-            .udp()
-            .server_reflexive(
-                "10.0.0.1:1000".parse().unwrap(),
-                "[::1]:1000".parse().unwrap(),
-            )?
-            .build()?;
-
-        Candidate::builder()
-            .tcp()
-            .server_reflexive(
-                "10.0.0.1:1000".parse().unwrap(),
-                "[::1]:1000".parse().unwrap(),
-            )?
-            .tcptype(TcpType::Passive)
-            .build()?;
-        Ok(())
-    }
-
     fn host(socket: &str) -> String {
         Candidate::host(socket.parse().unwrap(), "udp")
             .unwrap()
@@ -1100,5 +1077,83 @@ mod tests {
         Candidate::relayed(addr.parse().unwrap(), local.parse().unwrap(), "udp")
             .unwrap()
             .to_sdp_string()
+    }
+
+    #[test]
+    fn builder_matches_api_host() {
+        let addr = "1.2.3.4:1234".parse().unwrap();
+
+        // UDP Host
+        let api = Candidate::host(addr, Protocol::Udp).unwrap();
+        let builder = Candidate::builder().udp().host(addr).build().unwrap();
+        assert_eq!(api, builder);
+        assert_eq!(api.to_sdp_string(), builder.to_sdp_string());
+
+        // TCP Host
+        let api = Candidate::host(addr, Protocol::Tcp).unwrap();
+        let builder = Candidate::builder().tcp().host(addr).build().unwrap();
+        assert_eq!(api, builder);
+        assert_eq!(api.to_sdp_string(), builder.to_sdp_string());
+    }
+
+    #[test]
+    fn builder_matches_api_server_reflexive() {
+        let addr = "95.1.1.1:5000".parse().unwrap();
+        let base = "192.168.1.50:5000".parse().unwrap();
+
+        let api = Candidate::server_reflexive(addr, base, Protocol::Udp).unwrap();
+        let builder = Candidate::builder()
+            .udp()
+            .server_reflexive(addr, base)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(api, builder);
+        // raddr should be spoofed identically in both
+        assert_eq!(api.raddr(), builder.raddr());
+        assert_eq!(api.to_sdp_string(), builder.to_sdp_string());
+    }
+
+    #[test]
+    fn builder_matches_api_relayed() {
+        let addr = "1.2.3.4:3478".parse().unwrap(); // TURN relay addr
+        let local = "192.168.1.50:5000".parse().unwrap(); // Local interface
+
+        let api = Candidate::relayed(addr, local, Protocol::Udp).unwrap();
+        let builder = Candidate::builder()
+            .udp()
+            .relayed(addr, local)
+            .build()
+            .unwrap();
+
+        assert_eq!(api, builder);
+        assert_eq!(api.local(), builder.local());
+        assert_eq!(api.to_sdp_string(), builder.to_sdp_string());
+    }
+
+    #[test]
+    fn builder_tcp_variants() {
+        let addr = "1.2.3.4:1234".parse().unwrap();
+
+        let ssl_tcp = Candidate::builder().ssl_tcp().host(addr).build().unwrap();
+        assert_eq!(ssl_tcp.proto(), Protocol::SslTcp);
+
+        let tls = Candidate::builder().tls().host(addr).build().unwrap();
+        assert_eq!(tls.proto(), Protocol::Tls);
+    }
+
+    #[test]
+    fn builder_consistency_errors() {
+        let v4 = "1.2.3.4:1234".parse().unwrap();
+        let v6 = "[2001:db8::1]:1234".parse().unwrap();
+
+        // API returns error on mixed versions
+        let api_err = Candidate::server_reflexive(v4, v6, Protocol::Udp);
+        // Builder should return same error type
+        let builder_err = Candidate::builder().udp().server_reflexive(v4, v6);
+
+        assert!(api_err.is_err());
+        assert!(builder_err.is_err());
     }
 }
