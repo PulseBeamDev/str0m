@@ -699,7 +699,6 @@ impl<'de> Deserialize<'de> for Candidate {
     }
 }
 
-// --- Marker Types ---
 pub struct NoProtocol;
 pub struct Udp;
 pub struct Tcp;
@@ -708,11 +707,6 @@ pub struct Init;
 pub struct Ready;
 
 /// A typesafe builder for [Candidate].
-///
-/// Enforces RFC 8445 and RFC 6544 rules:
-/// - `tcptype` is only available for TCP candidates.
-/// - Mandatory addresses for reflexive/relay are enforced.
-/// - Priority and Foundation limits are checked.
 pub struct CandidateBuilder<P, S> {
     foundation: Option<String>,
     component_id: u16,
@@ -729,7 +723,7 @@ pub struct CandidateBuilder<P, S> {
     _marker: PhantomData<(P, S)>,
 }
 
-// --- Protocol Selection (Step 1) ---
+// Step 1: Protocol Selection
 impl CandidateBuilder<NoProtocol, Init> {
     pub fn udp(self) -> CandidateBuilder<Udp, Init> {
         self.into_protocol(Some(Protocol::Udp))
@@ -766,8 +760,7 @@ impl CandidateBuilder<NoProtocol, Init> {
     }
 }
 
-// --- Kind Selection (Step 2) ---
-// This logic is shared for both Udp and Tcp protocols.
+// Step 2: Candidate Type
 impl<P> CandidateBuilder<P, Init> {
     pub fn host(self, addr: SocketAddr) -> CandidateBuilder<P, Ready> {
         self.into_ready(CandidateKind::Host, addr, Some(addr), Some(addr), None)
@@ -829,7 +822,7 @@ impl<P> CandidateBuilder<P, Init> {
     }
 }
 
-// --- General Configuration (Step 3: Ready State) ---
+// Step 3: General Configurations
 impl<P> CandidateBuilder<P, Ready> {
     pub fn ufrag(mut self, ufrag: impl Into<String>) -> Self {
         self.ufrag = Some(ufrag.into());
@@ -887,9 +880,9 @@ impl<P> CandidateBuilder<P, Ready> {
     }
 }
 
-// --- TCP-Only Methods ---
+// TCP Based Configurations only
 impl CandidateBuilder<Tcp, Ready> {
-    /// RFC 6544: tcptype is only for TCP candidates.
+    /// RFC 6544: define tcp role
     pub fn tcptype(mut self, t: TcpType) -> Self {
         self.tcptype = Some(t);
         self
