@@ -89,8 +89,8 @@ pub(crate) struct Session {
     // temporary buffer when getting the next (unencrypted) RTP packet from Media line.
     poll_packet_buf: Vec<u8>,
 
-    // Next packet for RtpPacket event.
-    pending_packet: Option<RtpPacket>,
+    // Next packets for RtpPacket event (buffered in rtp_mode).
+    pending_packets: VecDeque<RtpPacket>,
 
     // Whether we sent a single outgoing RTP packet.
     packet_first_sent: bool,
@@ -157,7 +157,7 @@ impl Session {
             pacer,
             pacer_control: PacerControl::new(),
             poll_packet_buf: vec![0; 2000],
-            pending_packet: None,
+            pending_packets: VecDeque::new(),
             packet_first_sent: false,
             ice_lite: config.ice_lite,
             rtp_mode: config.rtp_mode,
@@ -551,11 +551,11 @@ impl Session {
         let packet = stream.handle_rtp(now, header, data, seq_no, receipt.time);
 
         if self.rtp_mode {
-            // In RTP mode, we store the packet temporarily here for the next poll_output().
+            // In RTP mode, we buffer packets here for the next poll_output().
             // However only if this is a packet not seen before. This filters out spurious
             // resends for padding.
             if receipt.is_new_packet {
-                self.pending_packet = Some(packet);
+                self.pending_packets.push_back(packet);
             }
         } else {
             // In non-RTP mode, we let the Media use a Depayloader.
@@ -647,14 +647,14 @@ impl Session {
             }
         }
 
-        // This must be before pending_packet.take() since we need to emit the unpaused event
+        // This must be before pending_packets since we need to emit the unpaused event
         // before the first packet causing the unpause.
         if let Some(paused) = self.streams.poll_stream_paused() {
             return Some(Event::StreamPaused(paused));
         }
 
         if self.rtp_mode {
-            if let Some(packet) = self.pending_packet.take() {
+            if let Some(packet) = self.pending_packets.pop_front() {
                 return Some(Event::RtpPacket(packet));
             }
         }
