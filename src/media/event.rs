@@ -9,6 +9,7 @@ use crate::sdp::{RestrictionId, Simulcast as SdpSimulcast, SimulcastGroups as Sd
 
 use super::PayloadParams;
 use crate::format::CodecExtra;
+use crate::streams::Payload;
 
 impl From<&SdpSimulcastLayer> for SimulcastLayer {
     fn from(layer: &SdpSimulcastLayer) -> Self {
@@ -261,7 +262,7 @@ pub struct MediaData {
     /// transmission units into smaller parts.
     ///
     /// This data is a full depayloaded Frame.
-    pub data: Vec<u8>,
+    pub data: Payload,
 
     /// RTP header extensions for this media data. This is taken from the
     /// first RTP header.

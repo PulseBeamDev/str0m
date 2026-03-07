@@ -4,6 +4,7 @@ use crate::format::PayloadParams;
 use crate::rtp_::MidRid;
 use crate::rtp_::VideoOrientation;
 use crate::session::Session;
+use crate::streams::Payload;
 use crate::RtcError;
 
 use super::{ExtensionValues, KeyframeRequestKind, Media, MediaTime, Mid, Pt, Rid, ToPayload};
@@ -131,7 +132,7 @@ impl<'a> Writer<'a> {
         pt: Pt,
         wallclock: Instant,
         rtp_time: MediaTime,
-        data: impl Into<Vec<u8>>,
+        data: impl Into<Payload>,
     ) -> Result<(), RtcError> {
         // This (indirect) unwrap is OK due to the invariant of self.mid being resolvable
         let media = media_by_mid_mut(&mut self.session.medias, self.mid);
@@ -146,7 +147,7 @@ impl<'a> Writer<'a> {
             }
         }
 
-        let data: Vec<u8> = data.into();
+        let data: Payload = data.into();
 
         trace!(
             "write {:?} {:?} {:?} time: {:?} len: {}",

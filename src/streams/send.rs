@@ -28,7 +28,7 @@ use crate::util::{already_happened, not_happening, InstantExt};
 use super::rtx_cache::RtxCache;
 use super::send_queue::SendQueue;
 use super::send_stats::StreamTxStats;
-use super::{rr_interval, RtpPacket};
+use super::{rr_interval, Payload, RtpPacket};
 
 /// The smallest size of padding for which we attempt to use a spurious resend. For padding
 /// requests smaller than this we use blank packets instead.
@@ -263,7 +263,7 @@ impl StreamTx {
         marker: bool,
         ext_vals: ExtensionValues,
         nackable: bool,
-        payload: Vec<u8>,
+        payload: impl Into<Payload>,
     ) -> Result<(), PacketError> {
         let first_call = self.rtp_and_wallclock.is_none();
 
@@ -294,7 +294,7 @@ impl StreamTx {
             seq_no,
             time: media_time,
             header,
-            payload,
+            payload: payload.into(),
             nackable,
             // The overall idea for str0m is to only drive time forward from handle_input. If we
             // used a "now" argument to write_rtp(), we effectively get a second point that also need

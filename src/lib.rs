@@ -720,7 +720,7 @@ pub mod rtp {
     pub use crate::rtp_::{ExtensionValues, UserExtensionValues};
 
     pub use crate::rtp_::{RtpHeader, SeqNo, Ssrc, VideoOrientation};
-    pub use crate::streams::{RtpPacket, StreamPaused, StreamRx, StreamTx};
+    pub use crate::streams::{Payload, RtpPacket, StreamPaused, StreamRx, StreamTx};
 
     /// Debug output of the unencrypted RTP and RTCP packets.
     ///

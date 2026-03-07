@@ -1,7 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self};
+use std::ops::Deref;
 use std::time::Duration;
 use std::time::Instant;
+
+use bytes::Bytes;
 
 use crate::format::CodecConfig;
 use crate::format::PayloadParams;
@@ -43,6 +46,105 @@ fn rr_interval(audio: bool) -> Duration {
     }
 }
 
+/// RTP or media payload bytes.
+///
+/// This type can hold either an owned `Vec<u8>` (existing behaviour) or a
+/// reference-counted [`bytes::Bytes`] slice.  Using `Bytes` allows an SFU to
+/// forward the same buffer to multiple peers without copying it.
+///
+/// All read-only byte-slice operations work through the [`Deref`] impl, so
+/// existing code that treats the payload as `&[u8]` continues to compile
+/// without modification.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Payload {
+    /// Solely owned buffer – the original, allocation-per-packet path.
+    Owned(Vec<u8>),
+    /// Shared, reference-counted buffer – zero-copy for SFU fan-out.
+    Shared(Bytes),
+}
+
+impl Payload {
+    /// Returns the length of the payload in bytes.
+    #[inline]
+    pub fn len(&self) -> usize {
+        match self {
+            Payload::Owned(v) => v.len(),
+            Payload::Shared(b) => b.len(),
+        }
+    }
+
+    /// Returns `true` if the payload contains no bytes.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Converts into a `Vec<u8>`, copying only when the payload is `Shared`.
+    #[inline]
+    pub fn into_vec(self) -> Vec<u8> {
+        match self {
+            Payload::Owned(v) => v,
+            Payload::Shared(b) => b.to_vec(),
+        }
+    }
+}
+
+impl Deref for Payload {
+    type Target = [u8];
+
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        match self {
+            Payload::Owned(v) => v.as_slice(),
+            Payload::Shared(b) => b.as_ref(),
+        }
+    }
+}
+
+impl AsRef<[u8]> for Payload {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self
+    }
+}
+
+impl From<Vec<u8>> for Payload {
+    #[inline]
+    fn from(v: Vec<u8>) -> Self {
+        Payload::Owned(v)
+    }
+}
+
+impl From<Bytes> for Payload {
+    #[inline]
+    fn from(b: Bytes) -> Self {
+        Payload::Shared(b)
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for Payload {
+    #[inline]
+    fn from(arr: [u8; N]) -> Self {
+        Payload::Owned(arr.to_vec())
+    }
+}
+
+impl From<&[u8]> for Payload {
+    #[inline]
+    fn from(s: &[u8]) -> Self {
+        Payload::Owned(s.to_vec())
+    }
+}
+
+impl fmt::Debug for Payload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Payload::Owned(v) => write!(f, "Payload::Owned({} bytes)", v.len()),
+            Payload::Shared(b) => write!(f, "Payload::Shared({} bytes)", b.len()),
+        }
+    }
+}
+
 /// Packet of RTP data.
 ///
 /// As emitted by [`Event::RtpPacket`][crate::Event::RtpPacket] when using rtp mode.
@@ -61,7 +163,7 @@ pub struct RtpPacket {
     pub header: RtpHeader,
 
     /// RTP payload. This contains no header.
-    pub payload: Vec<u8>,
+    pub payload: Payload,
 
     /// str0m server timestamp.
     ///
@@ -112,7 +214,7 @@ impl RtpPacket {
                 payload_type: BLANK_PACKET_DEFAULT_PT,
                 ..Default::default()
             },
-            payload: vec![], // This payload is never used. See RtpHeader::create_padding_packet
+            payload: Payload::Owned(vec![]), // This payload is never used. See RtpHeader::create_padding_packet
             nackable: false,
             last_sender_info: None,
             timestamp: already_happened(),

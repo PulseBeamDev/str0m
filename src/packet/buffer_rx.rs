@@ -4,6 +4,7 @@ use std::ops::{Range, RangeInclusive};
 use std::time::Instant;
 
 use crate::rtp_::{ExtensionValues, MediaTime, RtpHeader, SenderInfo, SeqNo};
+use crate::streams::Payload;
 
 use super::contiguity::Contiguity;
 use super::contiguity_vp8::Vp8Contiguity;
@@ -90,7 +91,7 @@ impl Depacketized {
 #[derive(Debug)]
 struct Entry {
     meta: RtpMeta,
-    data: Vec<u8>,
+    data: Payload,
     head: bool,
     tail: bool,
 }
@@ -133,7 +134,7 @@ impl DepacketizingBuffer {
         }
     }
 
-    pub fn push(&mut self, meta: RtpMeta, data: Vec<u8>) {
+    pub fn push(&mut self, meta: RtpMeta, data: Payload) {
         // We're not emitting frames in the wrong order. If we receive
         // packets that are before the last emitted, we drop.
         //
@@ -554,7 +555,7 @@ mod test {
                 },
             };
 
-            buf.push(meta, data.to_vec());
+            buf.push(meta, data.to_vec().into());
 
             let mut depacks = vec![];
             while let Some(res) = buf.pop() {
@@ -769,7 +770,7 @@ mod test {
 
         for input in &inputs {
             let (meta, data) = construct_input(input.clone());
-            buffer.push(meta, data);
+            buffer.push(meta, data.into());
         }
 
         let res0before = buffer.pop().unwrap().unwrap(); // Pop PID: 23860, `contiguous_seq == true`.
@@ -783,7 +784,7 @@ mod test {
             if meta.seq_no == SeqNo::from(8689) {
                 continue; // Skip RTP packet with seq_num=8689 vp9_payload=[20, 2, 2, 2, 2, 2, 2, 2, 2].
             }
-            buffer.push(meta.clone(), data.clone());
+            buffer.push(meta.clone(), data.clone().into());
         }
 
         // Pop PID: 23860, `contiguous_seq == true`.
@@ -796,7 +797,7 @@ mod test {
             let (meta, data) = construct_input(input.clone());
             if meta.seq_no == SeqNo::from(8689) {
                 // Send RTP packet with seq_num=8689 vp9_payload=[20, 2, 2, 2, 2, 2, 2, 2, 2].
-                buffer.push(meta.clone(), data.clone());
+                buffer.push(meta.clone(), data.clone().into());
                 break;
             }
         }

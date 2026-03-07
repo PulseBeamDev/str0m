@@ -27,6 +27,7 @@ pub use writer::Writer;
 
 pub use crate::packet::MediaKind;
 pub use crate::rtp_::{Direction, ExtensionValues, Frequency, MediaTime, Mid, Pt, Rid};
+pub use crate::streams::Payload;
 
 /// Mid used for SSRC 0 non-media BWE probes.
 ///
@@ -182,7 +183,7 @@ pub(crate) struct ToPayload {
     pub wallclock: Instant,
     pub rtp_time: MediaTime,
     pub start_of_talk_spurt: bool,
-    pub data: Vec<u8>,
+    pub data: Payload,
     pub ext_vals: ExtensionValues,
 }
 
@@ -320,7 +321,7 @@ impl Media {
                     last_sender_info: dep.first_sender_info(),
                     audio_start_of_talk_spurt: codec.spec().codec.is_audio()
                         && dep.start_of_talkspurt(),
-                    data: dep.data,
+                    data: dep.data.into(),
                 }));
             }
         }
