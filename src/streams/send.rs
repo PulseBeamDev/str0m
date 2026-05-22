@@ -110,10 +110,10 @@ pub struct StreamTx {
     last_sender_report: Instant,
 
     /// If we have a pending incoming keyframe request.
-    pending_request_keyframe: Option<KeyframeRequestKind>,
+    pub(crate) pending_request_keyframe: Option<KeyframeRequestKind>,
 
     /// If we have a pending incoming remb request.
-    pending_request_remb: Option<Bitrate>,
+    pub(crate) pending_request_remb: Option<Bitrate>,
 
     /// Statistics of outgoing data.
     ///

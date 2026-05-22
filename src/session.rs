@@ -572,6 +572,11 @@ impl Session {
                 &self.codec_config,
             );
         }
+
+        // Stream borrow released by NLL above. Propagate unpause dirty bit now.
+        if receipt_outer.paused_event || receipt.paused_event {
+            self.streams.mark_stream_paused_dirty();
+        }
     }
 
     fn handle_rtcp(&mut self, now: Instant, buf: &[u8]) -> Option<()> {
@@ -604,15 +609,9 @@ impl Session {
             }
 
             if fb.is_for_rx() {
-                let Some(stream) = self.streams.stream_rx(&fb.ssrc()) else {
-                    continue;
-                };
-                stream.handle_rtcp(now, fb);
+                self.streams.handle_rtcp_stream_rx(fb.ssrc(), now, fb);
             } else {
-                let Some(stream) = self.streams.stream_tx(&fb.ssrc()) else {
-                    continue;
-                };
-                stream.handle_rtcp(now, fb);
+                self.streams.handle_rtcp_stream_tx(fb.ssrc(), now, fb);
             }
         }
 

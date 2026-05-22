@@ -102,7 +102,7 @@ pub struct StreamRx {
     paused: bool,
 
     /// Whether we need to emit a paused event for the current paused state.
-    need_paused_event: bool,
+    pub(crate) need_paused_event: bool,
 
     /// The configured threshold before considering the lack of packets as going into paused.
     pause_threshold: Duration,
@@ -440,6 +440,7 @@ impl StreamRx {
         RegisterUpdateReceipt {
             time,
             is_new_packet,
+            paused_event: was_paused,
         }
     }
 
@@ -701,6 +702,11 @@ impl StreamRx {
         })
     }
 
+    /// True if sender info has arrived and not yet been surfaced via poll_sender_info.
+    pub(crate) fn has_pending_sender_info(&self) -> bool {
+        self.sender_info.as_ref().map_or(false, |i| !i.emitted)
+    }
+
     /// Poll the most recent sender info and when it was received
     pub(crate) fn poll_sender_info(&mut self) -> Option<(SenderInfo, Instant)> {
         let i = self.sender_info.as_mut()?;
@@ -849,6 +855,8 @@ impl StreamRxStats {
 pub(crate) struct RegisterUpdateReceipt {
     pub time: MediaTime,
     pub is_new_packet: bool,
+    /// True when this update transitioned the stream out of paused (unpaused on first packet).
+    pub paused_event: bool,
 }
 
 #[cfg(test)]

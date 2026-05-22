@@ -11,7 +11,7 @@ use crate::rtp_::Ssrc;
 use crate::rtp_::{Bitrate, Pt};
 use crate::rtp_::{MediaTime, SenderInfo};
 use crate::rtp_::{Mid, Rid, SeqNo};
-use crate::rtp_::{Rtcp, RtpHeader};
+use crate::rtp_::{Rtcp, RtcpFb, RtpHeader};
 use crate::util::already_happened;
 
 pub use self::receive::StreamRx;
@@ -154,6 +154,13 @@ pub(crate) struct Streams {
     /// Whether periodic statistics reports are expected to be generated. This informs us on
     /// whether we should be holding onto data needed for those reports or not.
     enable_stats: bool,
+
+    /// Dirty flags — set when a pending event first appears, cleared after a full scan finds
+    /// nothing. Allows poll_* methods to skip O(N) scans when no events are pending.
+    dirty_keyframe: bool,
+    dirty_remb: bool,
+    dirty_sender_feedback: bool,
+    dirty_stream_paused: bool,
 }
 
 /// Delay between cleaning up the RxLookup.
@@ -180,6 +187,10 @@ impl Streams {
             mids_to_report: Vec::with_capacity(10),
             any_nack_active: None,
             enable_stats,
+            dirty_keyframe: false,
+            dirty_remb: false,
+            dirty_sender_feedback: false,
+            dirty_stream_paused: false,
         }
     }
 
@@ -382,6 +393,32 @@ impl Streams {
         None
     }
 
+    /// Route an RTCP feedback message to the correct StreamTx and set dirty bits.
+    pub(crate) fn handle_rtcp_stream_tx(&mut self, ssrc: Ssrc, now: Instant, fb: RtcpFb) {
+        let Some(stream) = self.streams_tx.get_mut(&ssrc) else {
+            return;
+        };
+        stream.handle_rtcp(now, fb);
+        self.dirty_keyframe |= stream.pending_request_keyframe.is_some();
+        self.dirty_remb |= stream.pending_request_remb.is_some();
+    }
+
+    /// Mark that a stream-paused event is pending (called from session when a stream unpauses
+    /// via update_register, which happens outside of Streams' own methods).
+    pub(crate) fn mark_stream_paused_dirty(&mut self) {
+        self.dirty_stream_paused = true;
+    }
+
+    /// Route an RTCP feedback message to the correct StreamRx and set dirty bits.
+    pub(crate) fn handle_rtcp_stream_rx(&mut self, ssrc: Ssrc, now: Instant, fb: RtcpFb) {
+        let Some(stream) = self.streams_rx.get_mut(&ssrc) else {
+            return;
+        };
+        let had = stream.has_pending_sender_info();
+        stream.handle_rtcp(now, fb);
+        self.dirty_sender_feedback |= !had && stream.has_pending_sender_info();
+    }
+
     pub(crate) fn regular_feedback_at(&self) -> Option<Instant> {
         let r = self.streams_rx.values().map(|s| s.receiver_report_at());
         let s = self.streams_tx.values().map(|s| s.sender_report_at());
@@ -433,7 +470,11 @@ impl Streams {
                 stream.maybe_create_nack(sender_ssrc, feedback);
             }
 
+            let had_paused_event = stream.need_paused_event;
             stream.handle_timeout(now);
+            if !had_paused_event && stream.need_paused_event {
+                self.dirty_stream_paused = true;
+            }
         }
 
         self.mids_to_report.clear(); // start over for StreamTx.
@@ -466,37 +507,74 @@ impl Streams {
     }
 
     pub(crate) fn poll_keyframe_request(&mut self) -> Option<KeyframeRequest> {
-        self.streams_tx.values_mut().find_map(|s| {
+        if !self.dirty_keyframe {
+            return None;
+        }
+        match self.streams_tx.values_mut().find_map(|s| {
             let kind = s.poll_keyframe_request()?;
             Some(KeyframeRequest {
                 mid: s.mid(),
                 rid: s.rid(),
                 kind,
             })
-        })
+        }) {
+            Some(req) => Some(req),
+            None => {
+                self.dirty_keyframe = false;
+                None
+            }
+        }
     }
 
     pub(crate) fn poll_sender_feedback(&mut self) -> Option<SenderFeedback> {
-        self.streams_rx.values_mut().find_map(|s| {
+        if !self.dirty_sender_feedback {
+            return None;
+        }
+        match self.streams_rx.values_mut().find_map(|s| {
             let (sender_info, at) = s.poll_sender_info()?;
-
             Some(SenderFeedback {
                 mid: s.mid(),
                 rid: s.rid(),
                 received_at: at,
                 sender_info,
             })
-        })
+        }) {
+            Some(fb) => Some(fb),
+            None => {
+                self.dirty_sender_feedback = false;
+                None
+            }
+        }
     }
 
     pub(crate) fn poll_remb_request(&mut self) -> Option<(Mid, Bitrate)> {
-        self.streams_tx
+        if !self.dirty_remb {
+            return None;
+        }
+        match self
+            .streams_tx
             .values_mut()
             .find_map(|s| s.poll_remb_request().map(|b| (s.mid(), b)))
+        {
+            Some(req) => Some(req),
+            None => {
+                self.dirty_remb = false;
+                None
+            }
+        }
     }
 
     pub(crate) fn poll_stream_paused(&mut self) -> Option<StreamPaused> {
-        self.streams_rx.values_mut().find_map(|s| s.poll_paused())
+        if !self.dirty_stream_paused {
+            return None;
+        }
+        match self.streams_rx.values_mut().find_map(|s| s.poll_paused()) {
+            Some(p) => Some(p),
+            None => {
+                self.dirty_stream_paused = false;
+                None
+            }
+        }
     }
 
     pub(crate) fn has_stream_rx(&self, ssrc: Ssrc) -> bool {
