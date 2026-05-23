@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Expose ICE candidate pair RTT in CandidatePairStats #962
   * Add stereo to opus format params #955
 
 # 0.19.0
