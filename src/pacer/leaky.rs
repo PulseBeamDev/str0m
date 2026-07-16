@@ -318,6 +318,11 @@ impl LeakyBucketPacer {
         }
 
         let any_queue_for_padding = self.queue_states.iter().any(|q| q.use_for_padding);
+        let padding_possible = self.padding_bitrate > Bitrate::ZERO && any_queue_for_padding;
+
+        if !padding_possible {
+            return None;
+        }
 
         // Probe padding bypasses the regular padding bitrate in
         // maybe_create_padding_request(), so it needs its own timeout too —
@@ -329,12 +334,6 @@ impl LeakyBucketPacer {
             // We explicitly don't return a queue to poll here. We need another call to
             // handle_timeout to request the padding before we can poll the selected queue.
             return Some(((next_probe_time, PacerReason::Probe2), None));
-        }
-
-        let padding_possible = self.padding_bitrate > Bitrate::ZERO && any_queue_for_padding;
-
-        if !padding_possible {
-            return None;
         }
 
         // If all queues are empty and we have a padding rate, wait until we have drained
