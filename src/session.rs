@@ -3,12 +3,11 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::Event;
 use crate::bwe::BweKind;
 use crate::bwe_::Bwe;
 use crate::config::KeyingMaterial;
-use crate::crypto::CryptoProvider;
 use crate::crypto::dtls::SrtpProfile;
+use crate::crypto::CryptoProvider;
 use crate::format::CodecConfig;
 use crate::format::PayloadParams;
 use crate::format::Vp9PacketizerMode;
@@ -23,16 +22,17 @@ use crate::rtp::{Extension, RawPacket};
 use crate::rtp_::Direction;
 use crate::rtp_::MidRid;
 use crate::rtp_::Pt;
-use crate::rtp_::SRTCP_OVERHEAD;
 use crate::rtp_::SeqNo;
+use crate::rtp_::SRTCP_OVERHEAD;
+use crate::rtp_::{extend_u16, RtpHeader, SessionId, TwccPacketId};
 use crate::rtp_::{Bitrate, ExtensionMap, Goodbye, Mid, ReportList, Rtcp, RtcpFb};
-use crate::rtp_::{RtpHeader, SessionId, TwccPacketId, extend_u16};
 use crate::rtp_::{SrtpContext, Ssrc};
 use crate::rtp_::{TwccRecvRegister, TwccSendRegister};
 use crate::stats::StatsSnapshot;
 use crate::streams::{RtpPacket, Streams};
-use crate::util::{Soonest, already_happened, not_happening};
-use crate::{Reason, net};
+use crate::util::{already_happened, not_happening, Soonest};
+use crate::Event;
+use crate::{net, Reason};
 use crate::{RtcConfig, RtcError};
 
 /// Minimum time we delay between sending nacks. This should be
@@ -518,7 +518,9 @@ impl Session {
             // we should not spend any CPU cycles towards decrypting it.
             trace!(
                 "Ignoring dupe packet mid: {} seq_no: {} is_repair: {}",
-                mid, seq_no, is_repair
+                mid,
+                seq_no,
+                is_repair
             );
             return;
         }
@@ -1069,6 +1071,13 @@ impl Session {
         }
     }
 
+    pub fn bwe_is_overusing(&self) -> bool {
+        self.bwe
+            .as_ref()
+            .map(|bwe| bwe.is_overusing())
+            .unwrap_or(false)
+    }
+
     #[allow(dead_code)]
     pub fn line_count(&self) -> usize {
         self.medias.len() + if self.app.is_some() { 1 } else { 0 }
@@ -1218,8 +1227,8 @@ fn update_max_seq(map: &mut HashMap<Ssrc, SeqNo>, ssrc: Ssrc, seq_no: SeqNo) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RtcConfig;
     use crate::io::DATAGRAM_MTU_TARGET;
+    use crate::RtcConfig;
 
     #[test]
     fn session_mtu_matches_config() {
