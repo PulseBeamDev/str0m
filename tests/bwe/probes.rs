@@ -4,10 +4,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use netem::{DataSize, NetemConfig};
-use str0m::RtcError;
 use str0m::bwe::Bitrate;
+use str0m::rtp::RawPacket;
+use str0m::{Event, RtcError};
 
-use crate::common::{BweTestContext, Step, connect_with_bwe, init_crypto_default, init_log};
+use crate::common::{
+    BweTestContext, Step, connect_with_bwe, connect_with_bwe_raw, init_crypto_default, init_log,
+};
 
 #[test]
 fn initial_exponential_probes_3x_and_6x() -> Result<(), RtcError> {
@@ -56,6 +59,50 @@ fn initial_exponential_probes_3x_and_6x() -> Result<(), RtcError> {
     let (mut l, mut r) = connect_with_bwe(Bitrate::mbps(1), Bitrate::mbps(10));
     let mut ctx = BweTestContext::new(&mut l, &mut r);
     ctx.run_plan(&mut l, &mut r, &plan)?;
+
+    Ok(())
+}
+
+#[test]
+fn initial_probe_before_first_media_packet() -> Result<(), RtcError> {
+    init_log();
+    init_crypto_default();
+
+    let plan = [
+        Step::Conditions {
+            description: "Capacity is available before media starts",
+            config: NetemConfig::new()
+                .latency(Duration::from_millis(10))
+                .link(Bitrate::mbps(2), DataSize::kbytes(100))
+                .seed(42),
+        },
+        Step::Media {
+            description: "Advertise demand without producing media",
+            desired_bitrate: Bitrate::mbps(1),
+            media_send_rate: Bitrate::ZERO,
+        },
+        Step::Run {
+            description: "Allow the initial SSRC 0 probe to start",
+            duration: Duration::from_millis(100),
+        },
+        Step::CheckProbe {
+            description: "Initial probing must not require a media packet",
+            check: Arc::new(|_, probe| probe.target_bitrate() >= Bitrate::mbps(1)),
+        },
+    ];
+
+    let (mut l, mut r) = connect_with_bwe_raw(Bitrate::kbps(500), Bitrate::mbps(1));
+    let mut ctx = BweTestContext::new(&mut l, &mut r);
+    ctx.run_plan(&mut l, &mut r, &plan)?;
+
+    assert!(
+        l.events.iter().any(|(_, event)| matches!(
+            event,
+            Event::RawPacket(packet)
+                if matches!(&**packet, RawPacket::RtpTx(header, _) if header.ssrc.is_probe())
+        )),
+        "initial probe padding was not sent on SSRC 0"
+    );
 
     Ok(())
 }

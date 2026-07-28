@@ -21,15 +21,35 @@ pub use test_common::*;
 
 /// Helper to create two connected peers with BWE enabled on the sender.
 pub fn connect_with_bwe(initial_bitrate: Bitrate, desired_bitrate: Bitrate) -> (TestRtc, TestRtc) {
+    connect_with_bwe_config(initial_bitrate, desired_bitrate, false)
+}
+
+/// Like [`connect_with_bwe`], but emits raw RTP/RTCP events for wire assertions.
+pub fn connect_with_bwe_raw(
+    initial_bitrate: Bitrate,
+    desired_bitrate: Bitrate,
+) -> (TestRtc, TestRtc) {
+    connect_with_bwe_config(initial_bitrate, desired_bitrate, true)
+}
+
+fn connect_with_bwe_config(
+    initial_bitrate: Bitrate,
+    desired_bitrate: Bitrate,
+    enable_raw_packets: bool,
+) -> (TestRtc, TestRtc) {
     let start = Instant::now();
 
     // Only sender (L) needs BWE enabled
     let rtc1 = Rtc::builder()
         .set_rtp_mode(true)
+        .enable_raw_packets(enable_raw_packets)
         .enable_bwe(Some(initial_bitrate))
         .build(start);
 
-    let rtc2 = Rtc::builder().set_rtp_mode(true).build(start);
+    let rtc2 = Rtc::builder()
+        .set_rtp_mode(true)
+        .enable_raw_packets(enable_raw_packets)
+        .build(start);
 
     let (mut l, mut r) = connect_l_r_with_rtc(rtc1, rtc2);
 

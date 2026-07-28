@@ -287,9 +287,9 @@ impl Session {
             return;
         };
 
-        // We can only run probes after first packet is sent and there
-        // are any queues that can handle padding requests.
-        let do_probe = self.packet_first_sent && self.pacer.has_padding_queue();
+        // A negotiated padding-capable queue is enough to probe. Before regular
+        // media starts, probe padding is sent on SSRC 0.
+        let do_probe = self.pacer.has_padding_queue();
 
         if let Some(probe_config) = bwe.handle_timeout(now, do_probe) {
             // Only start the probe in the pacer if the estimator accepted it.
@@ -915,7 +915,8 @@ impl Session {
         let twcc_enabled = exts.id_of(Extension::TransportSequenceNumber).is_some();
         let twcc = twcc_enabled.then_some(&mut self.twcc);
 
-        let receipt = stream.poll_packet(now, exts, twcc, params, buf)?;
+        let use_probe_ssrc = !self.packet_first_sent && cluster_id.is_some();
+        let receipt = stream.poll_packet(now, exts, twcc, params, buf, use_probe_ssrc)?;
 
         let PacketReceipt {
             header,
@@ -960,7 +961,7 @@ impl Session {
             self.media_bytes_tx += payload_size as u64;
         }
 
-        if !self.packet_first_sent {
+        if !is_padding && !header.ssrc.is_probe() && !self.packet_first_sent {
             self.packet_first_sent = true;
         }
 

@@ -491,6 +491,7 @@ impl StreamTx {
         twcc: Option<&mut u64>,
         params: &[PayloadParams],
         buf: &mut Vec<u8>,
+        use_probe_ssrc: bool,
     ) -> Option<PacketReceipt> {
         let mid = self.midrid.mid();
         let rid = self.midrid.rid();
@@ -601,6 +602,13 @@ impl StreamTx {
 
                 if !remote_acked_rtx_ssrc {
                     header.ext_vals.mid = Some(mid);
+                }
+
+                if matches!(next.kind, NextPacketKind::Blank(_)) && use_probe_ssrc {
+                    header.ssrc = 0.into();
+                    header.ext_vals.mid = None;
+                    header.ext_vals.rid = None;
+                    header.ext_vals.rid_repair = None;
                 }
 
                 header

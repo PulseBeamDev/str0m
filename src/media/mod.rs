@@ -554,8 +554,9 @@ impl Media {
     pub(crate) fn first_pt_with_rtx(&self, config: &CodecConfig) -> Option<Pt> {
         config
             .all_for_kind(self.kind)
-            // Only consider negotiated PTs
-            .filter(|p| self.remote_pts.contains(&p.pt))
+            // SDP media must use a negotiated PT. Direct-API media has no
+            // remote PT list, so use its configured codec set.
+            .filter(|p| self.remote_pts.is_empty() || self.remote_pts.contains(&p.pt))
             // Map to the first PT found in payload params with RTX
             .find_map(|p| p.resend().map(|_| p.pt))
     }
