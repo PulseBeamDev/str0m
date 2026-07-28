@@ -160,6 +160,13 @@ impl RateControl {
         self.estimated_bitrate
     }
 
+    pub fn set_min_bitrate(&mut self, min_bitrate: Bitrate) {
+        debug_assert!(!min_bitrate.is_zero());
+        debug_assert!(min_bitrate <= self.max_bitrate);
+        self.min_bitrate = min_bitrate;
+        self.estimated_bitrate = self.estimated_bitrate.max(min_bitrate);
+    }
+
     /// Set a probe result indicating discovered capacity.
     ///
     /// When a probe succeeds, it means the network can handle at least this bitrate.

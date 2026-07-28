@@ -88,6 +88,12 @@ pub enum Step {
         desired_bitrate: Bitrate,
         media_send_rate: Bitrate,
     },
+    VbrMedia {
+        description: &'static str,
+        desired_bitrate: Bitrate,
+        allocated_bitrate: Bitrate,
+        media_send_rate: Bitrate,
+    },
     /// Run simulation for duration
     Run {
         description: &'static str,
@@ -170,6 +176,21 @@ impl BweTestContext {
                     media_send_rate,
                 } => {
                     info!("{}/{}: Media rates: {}", no + 1, total, description);
+                    l.bwe().set_current_bitrate(*media_send_rate);
+                    l.bwe().set_desired_bitrate(*desired_bitrate);
+                    self.set_media_send_rate(*media_send_rate);
+                    event_offset = l.events.len();
+                }
+                Step::VbrMedia {
+                    description,
+                    desired_bitrate,
+                    allocated_bitrate,
+                    media_send_rate,
+                } => {
+                    info!("{}/{}: VBR media rates: {}", no + 1, total, description);
+                    debug_assert!(*media_send_rate <= *allocated_bitrate);
+                    debug_assert!(*allocated_bitrate <= *desired_bitrate);
+                    l.bwe().set_current_bitrate(*allocated_bitrate);
                     l.bwe().set_desired_bitrate(*desired_bitrate);
                     self.set_media_send_rate(*media_send_rate);
                     event_offset = l.events.len();

@@ -347,6 +347,12 @@ impl Streams {
             .or_insert_with(|| StreamTx::new(ssrc, rtx, midrid, self.enable_stats, self.mtu_warn))
     }
 
+    pub(crate) fn ensure_probe_stream_tx(&mut self, mid: Mid, pt: Pt) {
+        self.streams_tx
+            .entry(0.into())
+            .or_insert_with(|| StreamTx::new_probe(mid, pt, self.mtu_warn));
+    }
+
     pub fn remove_stream_tx(&mut self, ssrc: Ssrc) -> bool {
         self.streams_tx.remove(&ssrc).is_some()
     }
@@ -354,6 +360,7 @@ impl Streams {
     pub(crate) fn local_sender_ssrcs(&self) -> Vec<Ssrc> {
         self.streams_tx
             .values()
+            .filter(|s| !s.ssrc().is_probe())
             .flat_map(|s| std::iter::once(s.ssrc()).chain(s.rtx()))
             .collect()
     }
@@ -467,6 +474,9 @@ impl Streams {
         }
 
         for stream in self.streams_tx.values_mut() {
+            if stream.ssrc().is_probe() {
+                continue;
+            }
             let mid = stream.mid();
 
             // All StreamTx belonging to the same Mid are reported together.
@@ -593,7 +603,7 @@ impl Streams {
     }
 
     pub(crate) fn first_ssrc_local(&mut self) -> Ssrc {
-        if let Some(ssrc) = self.streams_tx.keys().next() {
+        if let Some(ssrc) = self.streams_tx.keys().find(|ssrc| !ssrc.is_probe()) {
             // If there is some local Tx SSRC, use that.
             *ssrc
         } else {

@@ -92,6 +92,8 @@ pub struct StreamTx {
     /// The Media mid and rid this stream belongs to.
     midrid: MidRid,
 
+    wire_mid: Option<Mid>,
+
     /// Set on first handle_timeout.
     kind: Option<MediaKind>,
 
@@ -308,6 +310,7 @@ impl StreamTx {
             ssrc,
             rtx,
             midrid,
+            wire_mid: None,
             kind: None,
             cname: None,
             clock_rate: None,
@@ -334,6 +337,24 @@ impl StreamTx {
             remote_acked_rtx_ssrc: false,
             mtu_warn,
         }
+    }
+
+    pub(crate) fn new_probe(mid: Mid, pt: Pt, mtu_warn: usize) -> Self {
+        let mut stream = Self::new(
+            0.into(),
+            None,
+            MidRid(crate::media::MID_PROBE, None),
+            false,
+            mtu_warn,
+        );
+        stream.wire_mid = Some(mid);
+        stream.pt_for_padding = Some(pt);
+        stream.unpaced = Some(false);
+        stream
+    }
+
+    pub(crate) fn wire_mid(&self) -> Option<Mid> {
+        self.wire_mid
     }
 
     /// The (primary) SSRC of this encoded stream.
@@ -481,7 +502,7 @@ impl StreamTx {
     }
 
     fn padding_enabled(&self) -> bool {
-        self.rtx.is_some() && self.pt_for_padding.is_some()
+        (self.rtx.is_some() || self.ssrc.is_probe()) && self.pt_for_padding.is_some()
     }
 
     pub(crate) fn poll_packet(
@@ -492,8 +513,9 @@ impl StreamTx {
         params: &[PayloadParams],
         buf: &mut Vec<u8>,
     ) -> Option<PacketReceipt> {
-        let mid = self.midrid.mid();
+        let mid = self.wire_mid.unwrap_or_else(|| self.midrid.mid());
         let rid = self.midrid.rid();
+        let ssrc = self.ssrc;
         let ssrc_rtx = self.rtx;
         let remote_acked_ssrc = self.remote_acked_ssrc;
         let remote_acked_rtx_ssrc = self.remote_acked_rtx_ssrc;
@@ -578,6 +600,16 @@ impl StreamTx {
                 header_ref.ext_vals.rid_repair = None;
 
                 header_ref.clone()
+            }
+            NextPacketKind::Blank(_) if ssrc.is_probe() => {
+                let mut header = header_ref.clone();
+                header.payload_type = pt_main;
+                header.ssrc = ssrc;
+                header.sequence_number = *next.seq_no as u16;
+                header.ext_vals.rid = None;
+                header.ext_vals.rid_repair = None;
+                header.ext_vals.mid = Some(mid);
+                header
             }
             NextPacketKind::Resend(_) | NextPacketKind::Blank(_) => {
                 // * For the Resend case, we will not have accepted/cached the packet unless

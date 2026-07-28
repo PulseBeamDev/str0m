@@ -97,9 +97,6 @@ pub(crate) struct Session {
     // Next packet for RtpPacket event.
     pending_packet: Option<RtpPacket>,
 
-    // Whether we sent a single outgoing RTP packet.
-    packet_first_sent: bool,
-
     // Total RTP payload bytes for media, including retransmissions.
     media_bytes_rx: u64,
     media_bytes_tx: u64,
@@ -178,7 +175,6 @@ impl Session {
             pacer_control: PacerControl::new(),
             poll_packet_buf: vec![0; 2000],
             pending_packet: None,
-            packet_first_sent: false,
             media_bytes_rx: 0,
             media_bytes_tx: 0,
             ice_lite: config.ice_lite,
@@ -291,9 +287,7 @@ impl Session {
             return;
         };
 
-        // We can only run probes after first packet is sent and there
-        // are any queues that can handle padding requests.
-        let do_probe = self.packet_first_sent && self.pacer.has_padding_queue();
+        let do_probe = self.pacer.has_padding_queue();
 
         if let Some(probe_config) = bwe.handle_timeout(now, do_probe) {
             // Only start the probe in the pacer if the estimator accepted it.
@@ -313,6 +307,7 @@ impl Session {
     }
 
     fn update_queue_state(&mut self, now: Instant) {
+        self.ensure_probe_stream_tx();
         let iter = self.streams.streams_tx().map(|m| m.queue_state(now));
 
         let Some(padding_request) = self.pacer.handle_timeout(now, iter) else {
@@ -325,6 +320,31 @@ impl Session {
             .expect("pacer to use an existing stream");
 
         stream.generate_padding(padding_request.padding);
+    }
+
+    fn ensure_probe_stream_tx(&mut self) {
+        if self.bwe.is_none() || self.streams.has_stream_tx(0.into()) {
+            return;
+        }
+
+        let Some((mid, pt)) = self.medias.iter().find_map(|media| {
+            if !media.direction().is_sending()
+                || media.kind().is_audio()
+                || media
+                    .remote_extmap()
+                    .id_of(Extension::TransportSequenceNumber)
+                    .is_none()
+            {
+                return None;
+            }
+            media
+                .first_pt_with_rtx(&self.codec_config)
+                .map(|pt| (media.mid(), pt))
+        }) else {
+            return;
+        };
+
+        self.streams.ensure_probe_stream_tx(mid, pt);
     }
 
     fn create_twcc_feedback(&mut self, sender_ssrc: Ssrc, now: Instant) -> Option<()> {
@@ -905,7 +925,15 @@ impl Session {
         // Figure out which, if any, queue to poll
         // The cluster_id is captured by the pacer at poll time, before register_send() might clear it
         let (midrid, cluster_id) = self.pacer.poll_queue()?;
-        let Some(media) = self.medias.iter().find(|m| m.mid() == midrid.mid()) else {
+        let media_mid = if midrid.mid() == MID_PROBE {
+            self.streams
+                .stream_tx_by_midrid(midrid)
+                .and_then(|stream| stream.wire_mid())
+        } else {
+            Some(midrid.mid())
+        };
+        let Some(media) = media_mid.and_then(|mid| self.medias.iter().find(|m| m.mid() == mid))
+        else {
             trace!("Pacer pointed to mid {} which has no media", midrid.mid());
             return None;
         };
@@ -966,10 +994,6 @@ impl Session {
 
         if !is_padding && !header.ssrc.is_probe() {
             self.media_bytes_tx += payload_size as u64;
-        }
-
-        if !self.packet_first_sent {
-            self.packet_first_sent = true;
         }
 
         Some(protected.into())
@@ -1071,17 +1095,17 @@ impl Session {
         }
     }
 
+    pub fn set_bwe_current_bitrate(&mut self, current_bitrate: Bitrate) {
+        if let Some(bwe) = self.bwe.as_mut() {
+            bwe.set_current_bitrate(current_bitrate);
+            self.configure_pacer();
+        }
+    }
+
     pub fn reset_bwe(&mut self, init_bitrate: Bitrate) {
         if let Some(bwe) = self.bwe.as_mut() {
             bwe.reset(init_bitrate);
         }
-    }
-
-    pub fn bwe_is_overusing(&self) -> bool {
-        self.bwe
-            .as_ref()
-            .map(|bwe| bwe.is_overusing())
-            .unwrap_or(false)
     }
 
     #[allow(dead_code)]

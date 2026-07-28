@@ -392,15 +392,19 @@ impl LossController {
         }
     }
 
-    // TODO: Determine if we want to integrate these two with the rest of the system.
     #[cfg(test)]
     pub fn set_max_bitrate(&mut self, max_bitrate: Bitrate) {
         self.max_bitrate = max_bitrate;
     }
 
-    #[cfg(test)]
     pub fn set_min_bitrate(&mut self, min_bitrate: Bitrate) {
+        debug_assert!(!min_bitrate.is_zero());
+        debug_assert!(min_bitrate <= self.max_bitrate);
         self.min_bitrate = min_bitrate;
+        self.current_estimate.loss_limited_bandwidth = self
+            .current_estimate
+            .loss_limited_bandwidth
+            .max(min_bitrate);
     }
 
     pub fn loss_based_result(&self) -> LossBasedBweResult {

@@ -56,6 +56,7 @@ const STARTUP_PHASE: Duration = Duration::from_secs(2);
 pub struct Bwe {
     bwe: SendSideBandwidthEstimator,
     desired_bitrate: Bitrate,
+    current_bitrate: Bitrate,
     smoother: EstimateSmoother,
 }
 
@@ -65,6 +66,7 @@ impl Bwe {
         Bwe {
             bwe: send_side_bwe,
             desired_bitrate: Bitrate::ZERO,
+            current_bitrate: initial,
             smoother: EstimateSmoother::new(),
         }
     }
@@ -122,6 +124,11 @@ impl Bwe {
 
     pub fn set_desired_bitrate(&mut self, v: Bitrate) {
         self.desired_bitrate = v;
+    }
+
+    pub fn set_current_bitrate(&mut self, v: Bitrate) {
+        self.current_bitrate = v;
+        self.bwe.set_min_bitrate(v.max(Bitrate::kbps(40)));
     }
 }
 
@@ -244,6 +251,7 @@ impl SendSideBandwidthEstimator {
         // During startup with no loss, use delay-based estimate directly
         if in_startup_phase(self.started_at, now) && loss <= 0.001 {
             self.loss_controller.set_bandwidth_estimate(delay_estimate);
+            self.propagate_estimate();
             return;
         }
 
@@ -329,7 +337,6 @@ impl SendSideBandwidthEstimator {
     }
 
     fn propagate_estimate(&mut self) {
-        // Do we have a value?
         let Some(estimate) = self.last_estimate() else {
             return;
         };
@@ -381,6 +388,12 @@ impl SendSideBandwidthEstimator {
                 }
             }
         }
+    }
+
+    pub fn set_min_bitrate(&mut self, min_bitrate: Bitrate) {
+        self.delay_controller.set_min_bitrate(min_bitrate);
+        self.loss_controller.set_min_bitrate(min_bitrate);
+        self.propagate_estimate();
     }
 
     /// Start analyzing a probe cluster.

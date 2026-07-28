@@ -10,6 +10,37 @@ use str0m::bwe::Bitrate;
 use crate::common::{BweTestContext, Step, connect_with_bwe, init_crypto_default, init_log};
 
 #[test]
+fn probes_before_first_media_packet() -> Result<(), RtcError> {
+    init_log();
+    init_crypto_default();
+
+    let plan = vec![
+        Step::Conditions {
+            description: "High bandwidth network",
+            config: NetemConfig::new()
+                .link(Bitrate::mbps(10), DataSize::kbytes(200))
+                .seed(42),
+        },
+        Step::Run {
+            description: "Probe without allocating media",
+            duration: Duration::from_secs(1),
+        },
+        Step::CheckProbe {
+            description: "Initial probe is emitted",
+            check: Arc::new(|_index, probe| {
+                probe.target_bitrate() >= Bitrate::mbps(3) && !probe.is_alr_probe()
+            }),
+        },
+    ];
+
+    let (mut l, mut r) = connect_with_bwe(Bitrate::mbps(1), Bitrate::mbps(10));
+    let mut ctx = BweTestContext::new(&mut l, &mut r);
+    ctx.run_plan(&mut l, &mut r, &plan)?;
+
+    Ok(())
+}
+
+#[test]
 fn initial_exponential_probes_3x_and_6x() -> Result<(), RtcError> {
     init_log();
     init_crypto_default();

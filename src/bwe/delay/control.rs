@@ -139,6 +139,11 @@ impl DelayController {
         self.last_estimate
     }
 
+    pub fn set_min_bitrate(&mut self, min_bitrate: Bitrate) {
+        self.rate_control.set_min_bitrate(min_bitrate);
+        self.last_estimate = Some(self.rate_control.estimated_bitrate());
+    }
+
     /// Whether the delay-based detector currently signals overuse.
     ///
     /// This is useful for gating behaviors (like probing) that would otherwise

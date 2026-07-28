@@ -22,6 +22,13 @@ pub enum BweKind {
 pub struct Bwe<'a>(pub(crate) RtcMut<'a>);
 
 impl<'a> Bwe<'a> {
+    /// Sets the total target bitrate currently allocated to outgoing video.
+    pub fn set_current_bitrate(&mut self, current_bitrate: Bitrate) {
+        let mut m = self.0.mutate();
+        m.session.set_bwe_current_bitrate(current_bitrate);
+        m.no_events();
+    }
+
     pub(crate) fn new(rtc: &'a mut Rtc) -> Self {
         Bwe(RtcMut::new(rtc))
     }
@@ -68,16 +75,5 @@ impl<'a> Bwe<'a> {
         m.session.reset_bwe(init_bitrate);
         // Resetting the estimator moves no output, only timers.
         m.no_events();
-    }
-
-    /// Whether the delay-based controller currently signals overuse.
-    ///
-    /// This is `true` while the congestion detector observes a rising delay trend, i.e. the
-    /// link is genuinely congested rather than merely application-limited. It lets a bitrate
-    /// allocator tell apart an estimate that fell because the link shrank (must react) from
-    /// one that fell only because less was being sent (safe to hold), since both look
-    /// identical from the estimate alone.
-    pub fn is_overusing(&self) -> bool {
-        self.0.session.bwe_is_overusing()
     }
 }
