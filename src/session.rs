@@ -1063,6 +1063,13 @@ impl Session {
         }
     }
 
+    pub fn set_bwe_current_bitrate(&mut self, current_bitrate: Bitrate) {
+        if let Some(bwe) = self.bwe.as_mut() {
+            bwe.set_current_bitrate(current_bitrate);
+            self.configure_pacer();
+        }
+    }
+
     pub fn reset_bwe(&mut self, init_bitrate: Bitrate) {
         if let Some(bwe) = self.bwe.as_mut() {
             bwe.reset(init_bitrate);
@@ -1097,22 +1104,17 @@ impl Session {
             return;
         };
         let is_overuse = bwe.is_overusing();
+        let (current_bitrate, desired_bitrate) = bwe.allocation_bitrates();
 
-        let has_active_media = self.has_active_outgoing_media();
-
-        // Calculate pacing and padding rates
-        let result = self
-            .pacer_control
-            .calculate(has_active_media, current_estimate, is_overuse);
+        let result = self.pacer_control.calculate(
+            current_bitrate,
+            desired_bitrate,
+            current_estimate,
+            is_overuse,
+        );
 
         self.pacer.set_padding_rate(result.padding_rate);
         self.pacer.set_pacing_rate(result.pacing_rate);
-    }
-
-    fn has_active_outgoing_media(&self) -> bool {
-        self.medias
-            .iter()
-            .any(|m| m.direction().is_sending() && !m.disabled())
     }
 
     pub fn media_by_mid(&self, mid: Mid) -> Option<&Media> {
