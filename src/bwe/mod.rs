@@ -55,6 +55,7 @@ const STARTUP_PHASE: Duration = Duration::from_secs(2);
 
 pub struct Bwe {
     bwe: SendSideBandwidthEstimator,
+    current_bitrate: Bitrate,
     desired_bitrate: Bitrate,
     smoother: EstimateSmoother,
 }
@@ -64,6 +65,7 @@ impl Bwe {
         let send_side_bwe = SendSideBandwidthEstimator::new(initial);
         Bwe {
             bwe: send_side_bwe,
+            current_bitrate: Bitrate::ZERO,
             desired_bitrate: Bitrate::ZERO,
             smoother: EstimateSmoother::new(),
         }
@@ -122,6 +124,14 @@ impl Bwe {
 
     pub fn set_desired_bitrate(&mut self, v: Bitrate) {
         self.desired_bitrate = v;
+    }
+
+    pub fn set_current_bitrate(&mut self, v: Bitrate) {
+        self.current_bitrate = v;
+    }
+
+    pub fn allocation_bitrates(&self) -> (Bitrate, Bitrate) {
+        (self.current_bitrate, self.desired_bitrate)
     }
 }
 

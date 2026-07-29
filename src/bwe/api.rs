@@ -18,6 +18,14 @@ pub enum BweKind {
 pub struct Bwe<'a>(pub(crate) &'a mut Rtc);
 
 impl<'a> Bwe<'a> {
+    /// Configure the currently allocated media bitrate.
+    ///
+    /// This controls continuous padding within the bandwidth already proven by
+    /// BWE. Set it to zero when no media is allocated.
+    pub fn set_current_bitrate(&mut self, current_bitrate: Bitrate) {
+        self.0.session.set_bwe_current_bitrate(current_bitrate);
+    }
+
     /// Configure the desired bitrate.
     ///
     /// Configure the bandwidth estimation system with the desired bitrate.
