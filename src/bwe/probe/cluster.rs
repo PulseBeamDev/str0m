@@ -172,6 +172,10 @@ impl ProbeClusterState {
         &self.config
     }
 
+    pub fn progress(&self) -> (DataSize, usize) {
+        (self.bytes_sent, self.packets_sent)
+    }
+
     /// Calculates the next probe time based on total bytes sent and target bitrate.
     /// This naturally handles variable packet sizes (media packets can be much larger
     /// than padding packets). Next packet can be sent when:

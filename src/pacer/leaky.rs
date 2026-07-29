@@ -152,7 +152,15 @@ impl Pacer for LeakyBucketPacer {
         // Update active probe state to track this packet
         // This ensures probe timing advances correctly even when sending media packets
         if let Some(probe) = self.probe_queue.front_mut() {
+            let (_, packets_before) = probe.progress();
             probe.record_packet(now, packet_size);
+            if packets_before == 0 {
+                trace!(
+                    cluster = ?probe.config().cluster(),
+                    bytes = packet_size.as_bytes_usize(),
+                    "Probe first packet sent"
+                );
+            }
         }
 
         // Check if probe is complete and store it for later retrieval
@@ -194,7 +202,7 @@ impl LeakyBucketPacer {
     /// The pacer will pace at the probe's target bitrate and track packets sent.
     /// Probes are queued and executed sequentially.
     pub(crate) fn start_probe(&mut self, config: ProbeClusterConfig) {
-        trace!(?config, "Probe start");
+        trace!(?config, queued = self.probe_queue.len(), "Probe queued");
         self.probe_queue.push_back(ProbeClusterState::new(config));
     }
 
@@ -220,6 +228,13 @@ impl LeakyBucketPacer {
 
         if probe.is_complete(now) {
             let cluster_id = probe.config().cluster();
+            let (bytes_sent, packets_sent) = probe.progress();
+            trace!(
+                ?cluster_id,
+                bytes = bytes_sent.as_bytes_usize(),
+                packets = packets_sent,
+                "Probe send complete"
+            );
             self.probe_queue.pop_front();
             return Some(cluster_id);
         }

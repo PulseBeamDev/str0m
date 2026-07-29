@@ -131,6 +131,12 @@ impl ProbeEstimator {
         }
 
         self.states.push_back(ProbeEstimatorState::new(config, now));
+        trace!(
+            cluster = ?config.cluster(),
+            target = %config.target_bitrate(),
+            active = self.states.len(),
+            "Probe estimator started"
+        );
         true
     }
 
@@ -144,11 +150,14 @@ impl ProbeEstimator {
     ) -> impl Iterator<Item = (ProbeClusterConfig, Bitrate)> + '_ {
         // Keep track of which clusters were updated in this call.
         self.did_update.clear();
+        let mut clustered_records = 0;
+        let mut matched_records = 0;
 
         for record in records {
             let Some(cluster) = record.cluster() else {
                 continue;
             };
+            clustered_records += 1;
 
             // Find the state for this cluster.
             let maybe_state = self
@@ -159,6 +168,7 @@ impl ProbeEstimator {
             let Some(state) = maybe_state else {
                 continue;
             };
+            matched_records += 1;
 
             let did_update = state.update(record);
 
@@ -169,6 +179,15 @@ impl ProbeEstimator {
                 self.did_update.retain(|c| *c != cluster);
                 self.did_update.push_back(cluster);
             }
+        }
+
+        if clustered_records > 0 {
+            trace!(
+                clustered_records,
+                matched_records,
+                active = self.states.len(),
+                "Probe TWCC feedback"
+            );
         }
 
         self.did_update
@@ -189,10 +208,12 @@ impl ProbeEstimator {
             .find(|s| s.config.cluster() == cluster_id);
 
         let Some(state) = maybe_state else {
+            trace!(?cluster_id, "Probe completion has no estimator state");
             return;
         };
 
         state.end_probe(now);
+        trace!(?cluster_id, "Probe estimator awaiting final feedback");
     }
 
     pub fn poll_timeout(&self) -> Instant {
@@ -227,6 +248,9 @@ impl ProbeEstimator {
     ///
     /// This should be called when probing is no longer possible.
     pub fn clear_probes(&mut self) {
+        if !self.states.is_empty() {
+            trace!(active = self.states.len(), "Clearing probe estimator state");
+        }
         self.states.clear();
     }
 }
