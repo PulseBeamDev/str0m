@@ -111,11 +111,8 @@ impl Bwe {
         self.bwe.last_estimate()
     }
 
-    pub fn on_media_sent(&mut self, payload_size: DataSize, is_padding: bool, now: Instant) {
-        if !is_padding {
-            // Update ALR detector with media bytes sent
-            self.bwe.on_media_sent(payload_size, now);
-        }
+    pub fn on_packet_sent(&mut self, payload_size: DataSize, now: Instant) {
+        self.bwe.on_packet_sent(payload_size, now);
     }
 
     pub fn is_overusing(&self) -> bool {
@@ -128,7 +125,6 @@ impl Bwe {
 
     pub fn set_current_bitrate(&mut self, v: Bitrate) {
         self.current_bitrate = v;
-        self.bwe.probe_control.set_current_bitrate(v);
     }
 
     pub fn allocation_bitrates(&self) -> (Bitrate, Bitrate) {
@@ -180,11 +176,7 @@ impl SendSideBandwidthEstimator {
         self.delay_controller.is_overusing()
     }
 
-    /// Update ALR detector with actual bytes sent.
-    ///
-    /// Should be called for media packets (not padding/probes).
-    /// This is typically called from the session's packet sending logic.
-    pub fn on_media_sent(&mut self, bytes: DataSize, now: Instant) {
+    pub fn on_packet_sent(&mut self, bytes: DataSize, now: Instant) {
         self.alr_detector.on_bytes_sent(bytes, now);
     }
 
@@ -241,21 +233,26 @@ impl SendSideBandwidthEstimator {
         let acked_bitrate = self.acked_bitrate_estimator.current_estimate();
 
         // Use the latest probe result from this update, if any
-        let accepted_probe_result = latest_probe_result.filter(|(cluster, bitrate)| {
-            let is_consistent = probe_is_consistent_with_acknowledged(*bitrate, acked_bitrate);
-            if !is_consistent {
+        let limited_probe_result = latest_probe_result.map(|(cluster, bitrate)| {
+            let limited_bitrate = limit_probe_bitrate(
+                bitrate,
+                acked_bitrate,
+                self.delay_controller.last_estimate(),
+            );
+            if limited_bitrate != bitrate {
                 trace!(
                     target: "str0m::bwe::probe::result",
                     ?cluster,
                     ?bitrate,
                     ?acked_bitrate,
-                    "Ignoring probe estimate below acknowledged bitrate"
+                    ?limited_bitrate,
+                    "Limited probe estimate below acknowledged bitrate"
                 );
             }
-            is_consistent
+            (cluster, limited_bitrate)
         });
-        let probe_result = accepted_probe_result.map(|(_, bitrate)| bitrate);
-        let probe_cluster = accepted_probe_result.map(|(cluster, _)| cluster);
+        let probe_result = limited_probe_result.map(|(_, bitrate)| bitrate);
+        let probe_cluster = limited_probe_result.map(|(cluster, _)| cluster);
 
         let is_probe_result = probe_result.is_some();
 
@@ -513,13 +510,24 @@ fn in_startup_phase(started_at: Option<Instant>, now: Instant) -> bool {
         .unwrap_or(false)
 }
 
-fn probe_is_consistent_with_acknowledged(
+fn limit_probe_bitrate(
     probe_bitrate: Bitrate,
     acknowledged_bitrate: Option<Bitrate>,
-) -> bool {
+    delay_estimate: Option<Bitrate>,
+) -> Bitrate {
     debug_assert!(probe_bitrate.is_valid());
     debug_assert!(acknowledged_bitrate.is_none_or(|bitrate| bitrate.is_valid()));
-    acknowledged_bitrate.is_none_or(|bitrate| probe_bitrate >= bitrate)
+    debug_assert!(delay_estimate.is_none_or(|bitrate| bitrate.is_valid()));
+
+    let Some(acknowledged_bitrate) = acknowledged_bitrate else {
+        return probe_bitrate;
+    };
+    let Some(delay_estimate) = delay_estimate else {
+        return probe_bitrate;
+    };
+
+    let lower_bound = delay_estimate.min(acknowledged_bitrate * 0.85);
+    probe_bitrate.max(lower_bound)
 }
 
 impl TryFrom<&TwccSendRecord> for AckedPacket {
@@ -565,22 +573,34 @@ mod test {
     use super::*;
 
     #[test]
-    fn probe_cannot_reduce_below_acknowledged_throughput() {
-        assert!(probe_is_consistent_with_acknowledged(
-            Bitrate::mbps(2),
-            Some(Bitrate::mbps(1))
-        ));
-        assert!(probe_is_consistent_with_acknowledged(
-            Bitrate::mbps(1),
-            Some(Bitrate::mbps(1))
-        ));
-        assert!(!probe_is_consistent_with_acknowledged(
-            Bitrate::kbps(500),
-            Some(Bitrate::mbps(1))
-        ));
-        assert!(probe_is_consistent_with_acknowledged(
-            Bitrate::kbps(500),
-            None
-        ));
+    fn low_probe_result_is_limited_by_acknowledged_throughput() {
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::kbps(100),
+                Some(Bitrate::mbps(1)),
+                Some(Bitrate::mbps(2))
+            ),
+            Bitrate::kbps(850)
+        );
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::kbps(100),
+                Some(Bitrate::mbps(2)),
+                Some(Bitrate::kbps(700))
+            ),
+            Bitrate::kbps(700)
+        );
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::mbps(2),
+                Some(Bitrate::mbps(1)),
+                Some(Bitrate::mbps(1))
+            ),
+            Bitrate::mbps(2)
+        );
+        assert_eq!(
+            limit_probe_bitrate(Bitrate::kbps(500), None, Some(Bitrate::mbps(1))),
+            Bitrate::kbps(500)
+        );
     }
 }

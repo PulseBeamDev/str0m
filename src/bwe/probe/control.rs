@@ -34,8 +34,6 @@ const MIN_TIME_BETWEEN_ALR_PROBES: Duration = Duration::from_secs(5);
 /// Allows probing up to 2x max_bitrate to account for bursty streams.
 const MAX_PROBE_BITRATE_FACTOR: f64 = 2.0;
 
-const MAX_ALLOCATION_PROBE_BITRATE_FACTOR: f64 = 1.1;
-
 /// Minimum time between stagnant periodic probes to avoid excessive probing when at capacity.
 const MIN_TIME_BETWEEN_STAGNANT_PROBES: Duration = Duration::from_secs(15);
 
@@ -61,7 +59,6 @@ pub struct ProbeControl {
 
     desired_bitrate: Option<Bitrate>,
     prev_desired: Option<Bitrate>,
-    current_bitrate: Option<Bitrate>,
 
     last_estimate: Option<Bitrate>,
     last_estimate_change: Option<Instant>,
@@ -107,7 +104,6 @@ impl Default for ProbeControl {
             next_timeout: not_happening(),
             desired_bitrate: None,
             prev_desired: None,
-            current_bitrate: None,
             last_estimate: None,
             last_estimate_change: None,
             last_cause: BandwidthLimitedCause::DelayBasedLimited,
@@ -140,7 +136,6 @@ impl ProbeControl {
             self.pending.clear();
             self.last_estimate = None;
             self.desired_bitrate = None;
-            self.current_bitrate = None;
             self.last_estimate_change = None;
             self.last_stagnant = None;
             self.last_probe = None;
@@ -159,11 +154,6 @@ impl ProbeControl {
         }
         self.desired_bitrate = Some(v);
         self.request_immediate();
-    }
-
-    pub fn set_current_bitrate(&mut self, v: Bitrate) {
-        debug_assert!(v.is_valid());
-        self.current_bitrate = Some(v);
     }
 
     pub fn set_estimated_bitrate(&mut self, v: Bitrate, cause: BandwidthLimitedCause) {
@@ -547,12 +537,7 @@ impl ProbeControl {
     }
 
     fn max_probe_bitrate(&self, desired: Bitrate) -> Bitrate {
-        let factor = if self.current_bitrate.is_some() {
-            MAX_ALLOCATION_PROBE_BITRATE_FACTOR
-        } else {
-            MAX_PROBE_BITRATE_FACTOR
-        };
-        desired * factor
+        desired * MAX_PROBE_BITRATE_FACTOR
     }
 
     fn queue_probe_with_max(
@@ -785,7 +770,6 @@ mod test {
         let now = Instant::now();
 
         pc.set_desired_bitrate(Bitrate::mbps(1));
-        pc.set_current_bitrate(Bitrate::ZERO);
         pc.set_estimated_bitrate(Bitrate::mbps(1), BandwidthLimitedCause::DelayBasedLimited);
 
         // Drain initial probes.
@@ -1002,13 +986,12 @@ mod test {
     }
 
     #[test]
-    fn exponential_probe_is_capped_near_desired_bitrate_after_startup() {
+    fn exponential_probe_is_capped_at_twice_desired_bitrate_after_startup() {
         let mut pc = ProbeControl::new();
         pc.enable(true);
         let now = Instant::now();
 
         pc.set_desired_bitrate(Bitrate::mbps(1));
-        pc.set_current_bitrate(Bitrate::ZERO);
         pc.set_estimated_bitrate(Bitrate::mbps(1), BandwidthLimitedCause::DelayBasedLimited);
 
         assert_eq!(
@@ -1024,8 +1007,7 @@ mod test {
         pc.set_estimated_bitrate(Bitrate::mbps(2), BandwidthLimitedCause::DelayBasedLimited);
 
         let probe = pc.handle_timeout(now + Duration::from_millis(10)).unwrap();
-        assert!(probe.target_bitrate() >= Bitrate::kbps(3080));
-        assert!(probe.target_bitrate() < Bitrate::bps(3_080_002));
+        assert_eq!(probe.target_bitrate(), Bitrate::mbps(4));
     }
 
     #[test]
