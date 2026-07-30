@@ -115,10 +115,6 @@ impl Bwe {
         self.bwe.on_packet_sent(payload_size, now);
     }
 
-    pub fn is_overusing(&self) -> bool {
-        self.bwe.is_overusing()
-    }
-
     pub fn set_desired_bitrate(&mut self, v: Bitrate) {
         self.desired_bitrate = v;
     }
@@ -166,14 +162,6 @@ impl SendSideBandwidthEstimator {
             link_capacity_estimator: LinkCapacityEstimator::new(),
             last_updated_estimate: None,
         }
-    }
-
-    /// Whether the delay-based detector currently signals overuse.
-    ///
-    /// This is useful for gating behaviors (like padding/probing) that would otherwise
-    /// re-excite the system while we're already congested.
-    pub fn is_overusing(&self) -> bool {
-        self.delay_controller.is_overusing()
     }
 
     pub fn on_packet_sent(&mut self, bytes: DataSize, now: Instant) {

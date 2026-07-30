@@ -1099,18 +1099,13 @@ impl Session {
         };
 
         let Some(current_estimate) = bwe.last_estimate() else {
-            // No estimate yet, no padding
             return;
         };
-        let is_overuse = bwe.is_overusing();
         let (current_bitrate, desired_bitrate) = bwe.allocation_bitrates();
 
-        let result = self.pacer_control.calculate(
-            current_bitrate,
-            desired_bitrate,
-            current_estimate,
-            is_overuse,
-        );
+        let result =
+            self.pacer_control
+                .calculate(current_bitrate, desired_bitrate, current_estimate);
 
         self.pacer.set_padding_rate(result.padding_rate);
         self.pacer.set_pacing_rate(result.pacing_rate);
