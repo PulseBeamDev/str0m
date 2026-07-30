@@ -128,6 +128,7 @@ impl Bwe {
 
     pub fn set_current_bitrate(&mut self, v: Bitrate) {
         self.current_bitrate = v;
+        self.bwe.probe_control.set_current_bitrate(v);
     }
 
     pub fn allocation_bitrates(&self) -> (Bitrate, Bitrate) {

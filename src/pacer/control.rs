@@ -5,10 +5,7 @@ const PACING_FACTOR: f64 = 1.1;
 pub(crate) struct PacingResult {
     /// The bitrate at which the pacer may emit padding **when there is no media queued**.
     ///
-    /// This value is intentionally an *absolute* target used by the pacer, not a “delta to add
-    /// on top of current media”. In practice the **effective padding** over time is the
-    /// difference between this target and the media actually sent, because padding is only used
-    /// to fill gaps (empty queues), not to continuously top-up while media is flowing.
+    /// This is the additional rate above the allocator's current media bitrate.
     pub padding_rate: Bitrate,
     pub pacing_rate: Bitrate,
 }
@@ -28,13 +25,13 @@ impl PacerControl {
         estimate: Bitrate,
         is_overuse: bool,
     ) -> PacingResult {
-        let padding_rate = if is_overuse {
-            Bitrate::ZERO
-        } else if !current_bitrate.is_zero() {
-            estimate.min(desired_bitrate)
-        } else {
-            Bitrate::ZERO
-        };
+        let padding_target = estimate.min(desired_bitrate);
+        let padding_rate =
+            if is_overuse || current_bitrate.is_zero() || current_bitrate >= padding_target {
+                Bitrate::ZERO
+            } else {
+                padding_target - current_bitrate
+            };
 
         // Set pacing rate to smooth out media transmission (burst avoidance).
         // Must be at least the current BWE estimate * factor, but also high enough
@@ -60,7 +57,7 @@ mod test {
 
         let r = c.calculate(Bitrate::kbps(500), Bitrate::kbps(1_500), estimate, false);
 
-        assert_eq!(r.padding_rate, estimate);
+        assert_eq!(r.padding_rate, Bitrate::kbps(500));
     }
 
     #[test]
@@ -89,6 +86,20 @@ mod test {
 
         let r = c.calculate(Bitrate::kbps(500), desired, Bitrate::kbps(1_000), false);
 
-        assert_eq!(r.padding_rate, desired);
+        assert_eq!(r.padding_rate, Bitrate::kbps(250));
+    }
+
+    #[test]
+    fn no_padding_when_current_bitrate_reaches_target() {
+        let c = PacerControl::new();
+
+        let r = c.calculate(
+            Bitrate::kbps(900),
+            Bitrate::kbps(750),
+            Bitrate::kbps(1_000),
+            false,
+        );
+
+        assert_eq!(r.padding_rate, Bitrate::ZERO);
     }
 }

@@ -34,6 +34,8 @@ const MIN_TIME_BETWEEN_ALR_PROBES: Duration = Duration::from_secs(5);
 /// Allows probing up to 2x max_bitrate to account for bursty streams.
 const MAX_PROBE_BITRATE_FACTOR: f64 = 2.0;
 
+const MAX_ALLOCATION_PROBE_BITRATE_FACTOR: f64 = 1.1;
+
 /// Minimum time between stagnant periodic probes to avoid excessive probing when at capacity.
 const MIN_TIME_BETWEEN_STAGNANT_PROBES: Duration = Duration::from_secs(15);
 
@@ -59,6 +61,7 @@ pub struct ProbeControl {
 
     desired_bitrate: Option<Bitrate>,
     prev_desired: Option<Bitrate>,
+    current_bitrate: Option<Bitrate>,
 
     last_estimate: Option<Bitrate>,
     last_estimate_change: Option<Instant>,
@@ -104,6 +107,7 @@ impl Default for ProbeControl {
             next_timeout: not_happening(),
             desired_bitrate: None,
             prev_desired: None,
+            current_bitrate: None,
             last_estimate: None,
             last_estimate_change: None,
             last_cause: BandwidthLimitedCause::DelayBasedLimited,
@@ -136,6 +140,7 @@ impl ProbeControl {
             self.pending.clear();
             self.last_estimate = None;
             self.desired_bitrate = None;
+            self.current_bitrate = None;
             self.last_estimate_change = None;
             self.last_stagnant = None;
             self.last_probe = None;
@@ -154,6 +159,11 @@ impl ProbeControl {
         }
         self.desired_bitrate = Some(v);
         self.request_immediate();
+    }
+
+    pub fn set_current_bitrate(&mut self, v: Bitrate) {
+        debug_assert!(v.is_valid());
+        self.current_bitrate = Some(v);
     }
 
     pub fn set_estimated_bitrate(&mut self, v: Bitrate, cause: BandwidthLimitedCause) {
@@ -285,8 +295,8 @@ impl ProbeControl {
         let p1 = estimate * self.config.first_exponential_probe_scale;
         let p2 = estimate * self.config.second_exponential_probe_scale;
 
-        self.queue_probe(p1, ProbeKind::Initial, desired, now);
-        self.queue_probe(p2, ProbeKind::Initial, desired, now);
+        self.queue_initial_probe(p1, desired, now);
+        self.queue_initial_probe(p2, desired, now);
         true
     }
 
@@ -318,7 +328,7 @@ impl ProbeControl {
         let target = estimate * scale;
 
         // Already probed at max rate; no point probing again.
-        let max = desired * MAX_PROBE_BITRATE_FACTOR;
+        let max = self.max_probe_bitrate(desired);
         if target >= max && last.further >= max * self.config.further_probe_threshold {
             return false;
         }
@@ -527,8 +537,33 @@ impl ProbeControl {
     }
 
     fn queue_probe(&mut self, bitrate: Bitrate, kind: ProbeKind, desired: Bitrate, now: Instant) {
-        // Cap at 2× desired bitrate.
+        let max = self.max_probe_bitrate(desired);
+        self.queue_probe_with_max(bitrate, kind, max, now);
+    }
+
+    fn queue_initial_probe(&mut self, bitrate: Bitrate, desired: Bitrate, now: Instant) {
         let max = desired * MAX_PROBE_BITRATE_FACTOR;
+        self.queue_probe_with_max(bitrate, ProbeKind::Initial, max, now);
+    }
+
+    fn max_probe_bitrate(&self, desired: Bitrate) -> Bitrate {
+        let factor = if self.current_bitrate.is_some() {
+            MAX_ALLOCATION_PROBE_BITRATE_FACTOR
+        } else {
+            MAX_PROBE_BITRATE_FACTOR
+        };
+        desired * factor
+    }
+
+    fn queue_probe_with_max(
+        &mut self,
+        bitrate: Bitrate,
+        kind: ProbeKind,
+        max: Bitrate,
+        now: Instant,
+    ) {
+        debug_assert!(!max.is_zero());
+        debug_assert_ne!(max, Bitrate::INFINITY);
         let bitrate = bitrate.min(max);
 
         // No probe at too small values.
@@ -750,6 +785,7 @@ mod test {
         let now = Instant::now();
 
         pc.set_desired_bitrate(Bitrate::mbps(1));
+        pc.set_current_bitrate(Bitrate::ZERO);
         pc.set_estimated_bitrate(Bitrate::mbps(1), BandwidthLimitedCause::DelayBasedLimited);
 
         // Drain initial probes.
@@ -961,7 +997,35 @@ mod test {
             probe.is_some(),
             "Should trigger periodic ALR probe after 5 seconds in ALR"
         );
-        assert!(probe.unwrap().is_alr_probe());
+        let probe = probe.unwrap();
+        assert!(probe.is_alr_probe());
+    }
+
+    #[test]
+    fn exponential_probe_is_capped_near_desired_bitrate_after_startup() {
+        let mut pc = ProbeControl::new();
+        pc.enable(true);
+        let now = Instant::now();
+
+        pc.set_desired_bitrate(Bitrate::mbps(1));
+        pc.set_current_bitrate(Bitrate::ZERO);
+        pc.set_estimated_bitrate(Bitrate::mbps(1), BandwidthLimitedCause::DelayBasedLimited);
+
+        assert_eq!(
+            pc.handle_timeout(now).unwrap().target_bitrate(),
+            Bitrate::mbps(2)
+        );
+        assert_eq!(
+            pc.handle_timeout(now).unwrap().target_bitrate(),
+            Bitrate::mbps(2)
+        );
+
+        pc.set_desired_bitrate(Bitrate::kbps(2800));
+        pc.set_estimated_bitrate(Bitrate::mbps(2), BandwidthLimitedCause::DelayBasedLimited);
+
+        let probe = pc.handle_timeout(now + Duration::from_millis(10)).unwrap();
+        assert!(probe.target_bitrate() >= Bitrate::kbps(3080));
+        assert!(probe.target_bitrate() < Bitrate::bps(3_080_002));
     }
 
     #[test]
