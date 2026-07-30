@@ -100,6 +100,12 @@ impl ProbeEstimator {
     /// given cluster ID. Returns `true` if the probe was started, `false` if
     /// it was rejected due to too many active probes.
     pub fn probe_start(&mut self, config: ProbeClusterConfig, now: Instant) -> bool {
+        debug_assert!(
+            self.states
+                .iter()
+                .all(|state| state.config.cluster() != config.cluster())
+        );
+
         // Under normal operation, we expect at most 2-4 active probes:
         // - Initial exponential probing: 2 probes (3×, 6×)
         // - Further probing: 1-2 additional probes
@@ -237,7 +243,12 @@ impl ProbeEstimator {
                 // Already logged in calculate_bitrate() during update().
             } else {
                 // Log the final rejection reason for the probe.
-                trace!(%result, "Probe result");
+                trace!(
+                    cluster = ?s.config.cluster(),
+                    target_bitrate = ?s.config.target_bitrate(),
+                    %result,
+                    "Probe result"
+                );
             }
 
             false
@@ -315,7 +326,12 @@ impl ProbeEstimatorState {
         };
 
         // Log the estimates continuously during the probe.
-        trace!(%result, "Probe result");
+        trace!(
+            cluster = ?self.config.cluster(),
+            target_bitrate = ?self.config.target_bitrate(),
+            %result,
+            "Probe result"
+        );
         log_probe_bitrate_estimate!(bitrate.as_f64());
 
         Some((self.config, bitrate))

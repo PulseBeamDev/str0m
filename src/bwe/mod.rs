@@ -142,6 +142,7 @@ struct SendSideBandwidthEstimator {
     acked_bitrate_estimator: AckedBitrateEstimator,
     probe_control: ProbeControl,
     probe_estimator: ProbeEstimator,
+    authoritative_probe_cluster: Option<TwccClusterId>,
     started_at: Option<Instant>,
     alr_detector: AlrDetector,
     link_capacity_estimator: LinkCapacityEstimator,
@@ -165,6 +166,7 @@ impl SendSideBandwidthEstimator {
             ),
             probe_control: ProbeControl::new(),
             probe_estimator: ProbeEstimator::new(),
+            authoritative_probe_cluster: None,
             started_at: None,
             alr_detector,
             link_capacity_estimator: LinkCapacityEstimator::new(),
@@ -197,7 +199,23 @@ impl SendSideBandwidthEstimator {
         // Feed records to probe estimator for analysis and process any new probe results
         let mut latest_probe_result = None;
         for (config, bitrate) in self.probe_estimator.update(send_records.iter().copied()) {
-            latest_probe_result = Some(bitrate);
+            let cluster = config.cluster();
+            let is_authoritative = self.authoritative_probe_cluster == Some(cluster);
+            trace!(
+                target: "str0m::bwe::probe::result",
+                ?cluster,
+                authoritative_cluster = ?self.authoritative_probe_cluster,
+                ?bitrate,
+                target_bitrate = ?config.target_bitrate(),
+                is_authoritative,
+                "Probe estimate candidate"
+            );
+
+            if !is_authoritative {
+                continue;
+            }
+
+            latest_probe_result = Some((cluster, bitrate));
 
             // Update link capacity estimator for every successful ALR probe, not just the latest.
             // The estimator internally takes the max of all probe results, building up knowledge
@@ -232,7 +250,8 @@ impl SendSideBandwidthEstimator {
         let acked_bitrate = self.acked_bitrate_estimator.current_estimate();
 
         // Use the latest probe result from this update, if any
-        let probe_result = latest_probe_result;
+        let probe_result = latest_probe_result.map(|(_, bitrate)| bitrate);
+        let probe_cluster = latest_probe_result.map(|(cluster, _)| cluster);
 
         let is_probe_result = probe_result.is_some();
 
@@ -255,7 +274,7 @@ impl SendSideBandwidthEstimator {
         // During startup with no loss, use delay-based estimate directly
         if in_startup_phase(self.started_at, now) && loss <= 0.001 {
             self.loss_controller.set_bandwidth_estimate(delay_estimate);
-            self.trace_decision(probe_result, acked_bitrate, loss, "startup");
+            self.trace_decision(probe_cluster, probe_result, acked_bitrate, loss, "startup");
             return;
         }
 
@@ -282,7 +301,7 @@ impl SendSideBandwidthEstimator {
             }
         }
 
-        self.trace_decision(probe_result, acked_bitrate, loss, "combined");
+        self.trace_decision(probe_cluster, probe_result, acked_bitrate, loss, "combined");
 
         // Feed the (possibly combined) estimate into subcomponents wanting it.
         self.propagate_estimate();
@@ -334,6 +353,7 @@ impl SendSideBandwidthEstimator {
         // If we can't probe, clear any pending/active probes
         if !do_probe {
             self.probe_estimator.clear_probes();
+            self.authoritative_probe_cluster = None;
         }
 
         self.probe_control.enable(do_probe);
@@ -363,6 +383,7 @@ impl SendSideBandwidthEstimator {
 
     fn trace_decision(
         &self,
+        probe_cluster: Option<TwccClusterId>,
         probe_estimate: Option<Bitrate>,
         acknowledged_bitrate: Option<Bitrate>,
         loss: f64,
@@ -375,6 +396,7 @@ impl SendSideBandwidthEstimator {
 
         trace!(
             target: "str0m::bwe::decision",
+            ?probe_cluster,
             ?probe_estimate,
             ?acknowledged_bitrate,
             ?delay_estimate,
@@ -430,7 +452,11 @@ impl SendSideBandwidthEstimator {
     /// to tell the estimator which cluster to watch for in TWCC feedback.
     /// Returns `true` if the probe was started, `false` if rejected.
     pub fn start_probe(&mut self, config: ProbeClusterConfig, now: Instant) -> bool {
-        self.probe_estimator.probe_start(config, now)
+        let did_start = self.probe_estimator.probe_start(config, now);
+        if did_start {
+            self.authoritative_probe_cluster = Some(config.cluster());
+        }
+        did_start
     }
 
     /// End a probe cluster and mark it for cleanup.
@@ -523,5 +549,26 @@ impl fmt::Display for BandwidthUsage {
             BandwidthUsage::Normal => write!(f, "normal"),
             BandwidthUsage::Underuse => write!(f, "underuse"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::bwe_::probe::ProbeKind;
+
+    #[test]
+    fn newest_started_probe_cluster_is_authoritative() {
+        let mut bwe = SendSideBandwidthEstimator::new(Bitrate::mbps(1));
+        let now = Instant::now();
+        let first = ProbeClusterConfig::new(1.into(), Bitrate::mbps(2), ProbeKind::Exponential);
+        let second = ProbeClusterConfig::new(2.into(), Bitrate::mbps(3), ProbeKind::Exponential);
+
+        assert!(bwe.start_probe(first, now));
+        assert_eq!(bwe.authoritative_probe_cluster, Some(first.cluster()));
+
+        assert!(bwe.start_probe(second, now));
+        assert_eq!(bwe.authoritative_probe_cluster, Some(second.cluster()));
+        assert_ne!(bwe.authoritative_probe_cluster, Some(first.cluster()));
     }
 }
