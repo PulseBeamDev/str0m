@@ -221,7 +221,13 @@ impl SendSideBandwidthEstimator {
         let acked_bitrate = self.acked_bitrate_estimator.current_estimate();
 
         // Use the latest probe result from this update, if any
-        let probe_result = latest_probe_result;
+        let probe_result = latest_probe_result.map(|bitrate| {
+            limit_probe_bitrate(
+                bitrate,
+                acked_bitrate,
+                self.delay_controller.last_estimate(),
+            )
+        });
 
         let is_probe_result = probe_result.is_some();
 
@@ -447,6 +453,26 @@ fn in_startup_phase(started_at: Option<Instant>, now: Instant) -> bool {
         .unwrap_or(false)
 }
 
+fn limit_probe_bitrate(
+    probe_bitrate: Bitrate,
+    acknowledged_bitrate: Option<Bitrate>,
+    delay_estimate: Option<Bitrate>,
+) -> Bitrate {
+    debug_assert!(probe_bitrate.is_valid());
+    debug_assert!(acknowledged_bitrate.is_none_or(|bitrate| bitrate.is_valid()));
+    debug_assert!(delay_estimate.is_none_or(|bitrate| bitrate.is_valid()));
+
+    let Some(acknowledged_bitrate) = acknowledged_bitrate else {
+        return probe_bitrate;
+    };
+    let Some(delay_estimate) = delay_estimate else {
+        return probe_bitrate;
+    };
+
+    let lower_bound = delay_estimate.min(acknowledged_bitrate * 0.85);
+    probe_bitrate.max(lower_bound)
+}
+
 impl TryFrom<&TwccSendRecord> for AckedPacket {
     type Error = ();
 
@@ -482,5 +508,42 @@ impl fmt::Display for BandwidthUsage {
             BandwidthUsage::Normal => write!(f, "normal"),
             BandwidthUsage::Underuse => write!(f, "underuse"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn low_probe_result_is_limited_by_acknowledged_throughput() {
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::kbps(100),
+                Some(Bitrate::mbps(1)),
+                Some(Bitrate::mbps(2))
+            ),
+            Bitrate::kbps(850)
+        );
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::kbps(100),
+                Some(Bitrate::mbps(2)),
+                Some(Bitrate::kbps(700))
+            ),
+            Bitrate::kbps(700)
+        );
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::mbps(2),
+                Some(Bitrate::mbps(1)),
+                Some(Bitrate::mbps(1))
+            ),
+            Bitrate::mbps(2)
+        );
+        assert_eq!(
+            limit_probe_bitrate(Bitrate::kbps(500), None, Some(Bitrate::mbps(1))),
+            Bitrate::kbps(500)
+        );
     }
 }
