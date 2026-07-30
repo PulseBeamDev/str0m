@@ -254,6 +254,7 @@ impl SendSideBandwidthEstimator {
         // During startup with no loss, use delay-based estimate directly
         if in_startup_phase(self.started_at, now) && loss <= 0.001 {
             self.loss_controller.set_bandwidth_estimate(delay_estimate);
+            self.trace_decision(probe_result, acked_bitrate, loss, "startup");
             return;
         }
 
@@ -279,6 +280,8 @@ impl SendSideBandwidthEstimator {
                 self.loss_controller.set_bandwidth_estimate(delay_estimate);
             }
         }
+
+        self.trace_decision(probe_result, acked_bitrate, loss, "combined");
 
         // Feed the (possibly combined) estimate into subcomponents wanting it.
         self.propagate_estimate();
@@ -355,6 +358,33 @@ impl SendSideBandwidthEstimator {
 
         // Don't update until this changes.
         self.last_updated_estimate = Some(estimate);
+    }
+
+    fn trace_decision(
+        &self,
+        probe_estimate: Option<Bitrate>,
+        acknowledged_bitrate: Option<Bitrate>,
+        loss: f64,
+        path: &'static str,
+    ) {
+        let delay_estimate = self.delay_controller.last_estimate();
+        let loss_result = self.loss_controller.loss_based_result();
+        let final_estimate = self.last_estimate();
+        let cause = self.bandwidth_limited_cause();
+
+        trace!(
+            target: "str0m::bwe::decision",
+            ?probe_estimate,
+            ?acknowledged_bitrate,
+            ?delay_estimate,
+            loss_estimate = ?loss_result.bandwidth_estimate,
+            loss_state = ?loss_result.state,
+            ?final_estimate,
+            ?cause,
+            loss,
+            path,
+            "BWE decision"
+        );
     }
 
     fn bandwidth_limited_cause(&self) -> BandwidthLimitedCause {
