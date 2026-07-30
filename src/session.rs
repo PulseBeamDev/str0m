@@ -951,9 +951,8 @@ impl Session {
                 .register_seq(packet_id, now, payload_size);
         }
 
-        // Update BWE subsystem
         if let Some(bwe) = self.bwe.as_mut() {
-            bwe.on_media_sent(payload_size.into(), is_padding, now);
+            bwe.on_packet_sent(payload_size.into(), now);
         }
 
         if !is_padding && !header.ssrc.is_probe() {

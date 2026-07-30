@@ -111,11 +111,8 @@ impl Bwe {
         self.bwe.last_estimate()
     }
 
-    pub fn on_media_sent(&mut self, payload_size: DataSize, is_padding: bool, now: Instant) {
-        if !is_padding {
-            // Update ALR detector with media bytes sent
-            self.bwe.on_media_sent(payload_size, now);
-        }
+    pub fn on_packet_sent(&mut self, payload_size: DataSize, now: Instant) {
+        self.bwe.on_packet_sent(payload_size, now);
     }
 
     pub fn is_overusing(&self) -> bool {
@@ -179,11 +176,8 @@ impl SendSideBandwidthEstimator {
         self.delay_controller.is_overusing()
     }
 
-    /// Update ALR detector with actual bytes sent.
-    ///
-    /// Should be called for media packets (not padding/probes).
-    /// This is typically called from the session's packet sending logic.
-    pub fn on_media_sent(&mut self, bytes: DataSize, now: Instant) {
+    pub fn on_packet_sent(&mut self, bytes: DataSize, now: Instant) {
+        debug_assert!(bytes > DataSize::ZERO);
         self.alr_detector.on_bytes_sent(bytes, now);
     }
 
@@ -524,6 +518,22 @@ impl fmt::Display for BandwidthUsage {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn all_sent_packets_count_toward_application_usage() {
+        let mut bwe = Bwe::new(Bitrate::mbps(1));
+        let started_at = Instant::now();
+
+        bwe.on_packet_sent(DataSize::bytes(813), started_at);
+        for tick in 1..=100 {
+            bwe.on_packet_sent(
+                DataSize::bytes(813),
+                started_at + Duration::from_millis(tick * 10),
+            );
+        }
+
+        assert!(bwe.bwe.alr_detector.alr_start_time().is_none());
+    }
 
     #[test]
     fn low_probe_result_is_limited_by_acknowledged_throughput() {
