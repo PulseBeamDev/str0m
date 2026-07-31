@@ -10,6 +10,8 @@ use super::{ProbeClusterConfig, ProbeKind};
 use crate::rtp_::{Bitrate, TwccClusterId};
 use crate::util::{already_happened, not_happening};
 
+use tracing::trace;
+
 // Port notes:
 // This module ports WebRTC's `ProbeController` behavior from:
 // `webrtc/modules/congestion_controller/goog_cc/probe_controller.cc`
@@ -303,6 +305,11 @@ impl ProbeControl {
 
         // Estimate must exceed 70% of last probe rate to trigger further probing.
         if estimate < last.further {
+            trace!(
+                estimate_bps = estimate.as_f64() as u64,
+                further_threshold_bps = last.further.as_f64() as u64,
+                "Exponential probe: estimate below further_threshold, waiting"
+            );
             return false;
         }
 
@@ -545,6 +552,13 @@ impl ProbeControl {
 
         // Threshold for further exponential probing (probe_bitrate * 0.7).
         let probe_further = bitrate * self.config.further_probe_threshold;
+
+        trace!(
+            ?kind,
+            target_bps = bitrate.as_f64() as u64,
+            further_threshold_bps = probe_further.as_f64() as u64,
+            "Probe queued"
+        );
 
         self.pending.push_back(config);
         self.last_probe = Some(LastProbe {

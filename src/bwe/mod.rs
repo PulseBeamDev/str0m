@@ -350,6 +350,13 @@ impl SendSideBandwidthEstimator {
 
         let cause = self.bandwidth_limited_cause();
 
+        tracing::trace!(
+            estimate_bps = estimate.as_f64() as u64,
+            ?cause,
+            in_alr = self.alr_detector.alr_start_time().is_some(),
+            "BWE estimate updated"
+        );
+
         self.probe_control.set_estimated_bitrate(estimate, cause);
         self.alr_detector.set_estimated_bitrate(estimate);
 
