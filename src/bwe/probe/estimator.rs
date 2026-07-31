@@ -24,6 +24,16 @@ const MAX_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 /// Matches WebRTC's `kMaxValidRatio`.
 const MAX_VALID_RATIO: f64 = 2.0;
 
+/// Maximum ratio of recv_interval / send_interval before rejecting the probe.
+///
+/// When one probe packet is significantly delayed (e.g., by 190ms on a path that
+/// normally has 10ms latency), `recv_interval` balloons while `send_interval` stays
+/// at the probe duration (~6-14ms). This makes `recv_rate` appear tiny (e.g. 27kbps
+/// from an 800kbps probe), which then cascades into a LargeDrop death spiral.
+///
+/// Reject any probe where the receive window is more than 5× the send window.
+const MAX_RECV_SEND_INTERVAL_RATIO: f64 = 5.0;
+
 /// Minimum |receive rate| / |send rate| ratio to consider the link unsaturated.
 /// Matches WebRTC's `kMinRatioForUnsaturatedLink`.
 const MIN_RATIO_FOR_UNSATURATED_LINK: f64 = 0.9;
@@ -357,6 +367,16 @@ impl ProbeEstimatorState {
             };
         }
         if recv_interval.is_zero() || recv_interval > MAX_PROBE_INTERVAL {
+            return ProbeResult::RecvIntervalInvalid {
+                interval: recv_interval,
+            };
+        }
+
+        // Reject if the receive window is disproportionately larger than the send window.
+        // A single delayed packet inflates recv_interval while send_interval stays at the
+        // actual probe duration, producing a wildly low receive rate.
+        let interval_ratio = recv_interval.as_secs_f64() / send_interval.as_secs_f64();
+        if interval_ratio > MAX_RECV_SEND_INTERVAL_RATIO {
             return ProbeResult::RecvIntervalInvalid {
                 interval: recv_interval,
             };
