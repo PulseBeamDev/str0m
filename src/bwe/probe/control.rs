@@ -28,6 +28,11 @@ const MAX_WAITING_TIME_FOR_PROBING_RESULT: Duration = Duration::from_secs(1);
 const BITRATE_DROP_THRESHOLD: f64 = 0.66;
 const BITRATE_DROP_TIMEOUT: Duration = Duration::from_secs(5);
 const PROBE_FRACTION_AFTER_DROP: f64 = 0.85;
+/// After a LargeDrop probe fires, suppress new LargeDrop triggers for this long.
+/// Without this, a bad probe measurement causes the estimate to drop, which triggers
+/// another LargeDrop, producing an ever-lower probe target — a death spiral.
+/// During the cooldown, PeriodicAlr (every 5s) handles recovery instead.
+const LARGE_DROP_COOLDOWN: Duration = Duration::from_secs(30);
 const PROBE_UNCERTAINTY: f64 = 0.05;
 const ALR_ENDED_TIMEOUT: Duration = Duration::from_secs(3);
 const MIN_TIME_BETWEEN_ALR_PROBES: Duration = Duration::from_secs(5);
@@ -74,6 +79,7 @@ pub struct ProbeControl {
     last_probe: Option<LastProbe>,
 
     large_drop: Option<LargeDrop>,
+    last_large_drop_fired_at: Option<Instant>,
 
     last_stagnant: Option<Instant>,
 
@@ -115,6 +121,7 @@ impl Default for ProbeControl {
             next_cluster_id: 0.into(),
             last_probe: None,
             large_drop: None,
+            last_large_drop_fired_at: None,
             last_stagnant: None,
             pending: VecDeque::new(),
             scheduled_exponential: None,
@@ -492,6 +499,17 @@ impl ProbeControl {
             return false;
         }
 
+        // Cooldown: after a LargeDrop probe fires, suppress new triggers for a while.
+        // Without this, each bad probe measurement (e.g. a delayed packet inflating
+        // recv_interval) drops the estimate, triggering a new LargeDrop at an even lower
+        // target — a death spiral toward zero. During the cooldown, PeriodicAlr (every 5s)
+        // handles recovery.
+        if let Some(last_fired) = self.last_large_drop_fired_at {
+            if now.saturating_duration_since(last_fired) < LARGE_DROP_COOLDOWN {
+                return false;
+            }
+        }
+
         // Detect large drops: estimate fell below 66% of previous.
         if self.large_drop.is_none() {
             if let Some(prev) = self.prev_estimate {
@@ -530,6 +548,7 @@ impl ProbeControl {
         self.queue_probe(target, ProbeKind::LargeDrop, desired, now);
 
         self.large_drop = None;
+        self.last_large_drop_fired_at = Some(now);
         true
     }
 
