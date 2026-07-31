@@ -53,10 +53,11 @@ impl PacerControl {
             PADDING_TARGET.min(estimate)
         };
 
-        // Set pacing rate to smooth out media transmission (burst avoidance).
-        // Must be at least the current BWE estimate * factor, but also high enough
-        // to allow the padding we want to send.
-        let min_pacing_rate = estimate * PACING_FACTOR;
+        // Set pacing rate to smooth out media transmission (burst avoidance). libWebRTC uses
+        // `max(min_total_allocated_bitrate_, target) * pacing_factor_`, so an allocation above
+        // the estimate raises the pacing floor rather than queueing behind it. Also kept high
+        // enough to allow the padding we want to send.
+        let min_pacing_rate = current_bitrate.max(estimate) * PACING_FACTOR;
         let pacing_rate = min_pacing_rate.max(padding_rate);
 
         PacingResult {
@@ -108,6 +109,26 @@ mod test {
         let r = c.calculate(Bitrate::kbps(500), Bitrate::mbps(40), true);
 
         assert_eq!(r.padding_rate, Bitrate::ZERO);
+    }
+
+    /// `current_bitrate` is libWebRTC's `min_total_allocated_bitrate` in
+    /// `max(min_total_allocated_bitrate_, target) * pacing_factor_`.
+    #[test]
+    fn current_bitrate_acts_as_pacing_floor() {
+        let c = PacerControl::new();
+
+        let r = c.calculate(Bitrate::kbps(2_000), Bitrate::kbps(500), false);
+
+        assert_eq!(r.pacing_rate, Bitrate::kbps(2_000) * PACING_FACTOR);
+    }
+
+    #[test]
+    fn estimate_drives_pacing_when_above_allocation() {
+        let c = PacerControl::new();
+
+        let r = c.calculate(Bitrate::kbps(500), Bitrate::kbps(2_000), false);
+
+        assert_eq!(r.pacing_rate, Bitrate::kbps(2_000) * PACING_FACTOR);
     }
 
     /// A very low estimate caps padding, mirroring the `last_pushback_target_rate_` clamp.
