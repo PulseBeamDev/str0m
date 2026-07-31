@@ -1029,7 +1029,12 @@ impl Default for Config {
             newton_step_size: 0.75,
             not_increase_if_inherent_loss_less_than_average_loss: true,
             delayed_increase_window: Duration::from_millis(300),
-            bandwidth_rampup_upper_bound_factor: 1.5,
+            // WebRTC `BwRampupUpperBoundFactor`, default 1000000.0. The bound is nominally
+            // `acknowledged_bitrate * factor`, but the default is large enough that it never
+            // binds. Capping at 1.5x acked stalls recovery whenever the application is sending
+            // far below capacity (e.g. static screen share), because the only way back up is a
+            // probe and the acked rate is then just the padding rate.
+            bandwidth_rampup_upper_bound_factor: 1_000_000.0,
             candidate_factor: [1.02, 1.0, 0.95],
             append_acknowledged_rate_candidate: true,
             append_delay_based_estimate_candidate: true,
@@ -1041,7 +1046,13 @@ impl Default for Config {
             threshold_of_high_bandwidth_preference: 0.2,
             bandwidth_preference_smoothing_factor: 0.002,
             use_byte_loss_ratio: true,
-            hold_duration_factor: 2.0,
+            // WebRTC `HoldDurationFactor`, default 0.0, which disables the HOLD mechanism
+            // entirely: `last_hold_info.duration` stays zero, so the hold check in
+            // `update_bandwidth_estimate` never fires. With a non-zero factor the hold doubles
+            // on every entry into `Decreasing` (up to 60s) and its early return skips the state
+            // transition, so the controller cannot leave `Decreasing` and probe results are
+            // truncated to the held rate.
+            hold_duration_factor: 0.0,
             bandwidth_rampup_hold_threshold: 1.3,
             bandwidth_rampup_upper_bound_factor_in_hold: 1.2,
         }
