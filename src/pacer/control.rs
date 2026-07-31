@@ -2,11 +2,28 @@ use crate::rtp_::Bitrate;
 
 const PACING_FACTOR: f64 = 1.1;
 
+/// Target padding rate when media is active.
+///
+/// This mirrors libWebRTC's `max_padding_rate`, which is *not* derived from the bandwidth
+/// estimate. It is computed by `CalculateMaxPadBitrateBps()` in `video_send_stream_impl.cc`
+/// from the configured encoder layers. With ALR probing enabled - which str0m always does -
+/// that collapses to the min bitrate of the lowest simulcast layer:
+///
+/// > With alr probing, just pad to the min bitrate of the lowest stream, probing will handle
+/// > the rest of the rampup.
+///
+/// So padding exists only to maintain NAT bindings and RTX state. Discovering additional
+/// capacity is the job of the periodic ALR probes, not of continuous padding.
+const PADDING_TARGET: Bitrate = Bitrate::bps(50_000);
+
 pub(crate) struct PacingResult {
     pub padding_rate: Bitrate,
     pub pacing_rate: Bitrate,
 }
 
+/// Controls the pacing and padding rates.
+///
+/// This follows libWebRTC's `GoogCcNetworkController::GetPacingRates()`.
 pub(crate) struct PacerControl {}
 
 impl PacerControl {
@@ -14,19 +31,23 @@ impl PacerControl {
         Self {}
     }
 
-    pub fn calculate(
-        &self,
-        current_bitrate: Bitrate,
-        desired_bitrate: Bitrate,
-        estimate: Bitrate,
-    ) -> PacingResult {
-        let padding_target = estimate.min(desired_bitrate);
+    /// Calculate pacing and padding rates.
+    ///
+    /// `current_bitrate` is the bitrate currently allocated to media. Padding is only sent
+    /// when media is actually allocated.
+    ///
+    /// Note the estimate only ever *caps* the padding rate, matching libWebRTC's
+    /// `padding_rate = std::min(padding_rate, last_pushback_target_rate_)`.
+    pub fn calculate(&self, current_bitrate: Bitrate, estimate: Bitrate) -> PacingResult {
         let padding_rate = if current_bitrate.is_zero() {
             Bitrate::ZERO
         } else {
-            padding_target
+            PADDING_TARGET.min(estimate)
         };
 
+        // Set pacing rate to smooth out media transmission (burst avoidance).
+        // Must be at least the current BWE estimate * factor, but also high enough
+        // to allow the padding we want to send.
         let min_pacing_rate = estimate * PACING_FACTOR;
         let pacing_rate = min_pacing_rate.max(padding_rate);
 
@@ -44,39 +65,42 @@ mod test {
     #[test]
     fn padding_enabled_with_active_media() {
         let c = PacerControl::new();
-        let estimate = Bitrate::kbps(1_000);
 
-        let r = c.calculate(Bitrate::kbps(500), Bitrate::kbps(1_500), estimate);
+        let r = c.calculate(Bitrate::kbps(500), Bitrate::kbps(1_000));
 
-        assert_eq!(r.padding_rate, estimate);
+        assert_eq!(r.padding_rate, PADDING_TARGET);
     }
 
     #[test]
     fn no_padding_without_active_media() {
         let c = PacerControl::new();
-        let estimate = Bitrate::kbps(1_000);
 
-        let r = c.calculate(Bitrate::ZERO, Bitrate::kbps(1_500), estimate);
+        let r = c.calculate(Bitrate::ZERO, Bitrate::kbps(1_000));
 
         assert_eq!(r.padding_rate, Bitrate::ZERO);
     }
 
+    /// The regression this change is about: padding must not scale with the estimate, or the
+    /// gap between media and the estimate gets filled with spurious RTX resends.
     #[test]
-    fn padding_target_does_not_exceed_desired_bitrate() {
+    fn padding_does_not_scale_with_estimate() {
         let c = PacerControl::new();
-        let desired = Bitrate::kbps(750);
 
-        let r = c.calculate(Bitrate::kbps(500), desired, Bitrate::kbps(1_000));
+        let low = c.calculate(Bitrate::kbps(500), Bitrate::kbps(800));
+        let high = c.calculate(Bitrate::kbps(500), Bitrate::mbps(10));
 
-        assert_eq!(r.padding_rate, desired);
+        assert_eq!(low.padding_rate, PADDING_TARGET);
+        assert_eq!(high.padding_rate, PADDING_TARGET);
     }
 
+    /// A very low estimate caps padding, mirroring the `last_pushback_target_rate_` clamp.
     #[test]
-    fn padding_target_is_independent_of_current_media_rate() {
+    fn estimate_caps_padding() {
         let c = PacerControl::new();
+        let estimate = Bitrate::kbps(20);
 
-        let r = c.calculate(Bitrate::kbps(900), Bitrate::kbps(750), Bitrate::kbps(1_000));
+        let r = c.calculate(Bitrate::kbps(500), estimate);
 
-        assert_eq!(r.padding_rate, Bitrate::kbps(750));
+        assert_eq!(r.padding_rate, estimate);
     }
 }

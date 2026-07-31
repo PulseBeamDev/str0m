@@ -123,8 +123,8 @@ impl Bwe {
         self.current_bitrate = v;
     }
 
-    pub fn allocation_bitrates(&self) -> (Bitrate, Bitrate) {
-        (self.current_bitrate, self.desired_bitrate)
+    pub fn current_bitrate(&self) -> Bitrate {
+        self.current_bitrate
     }
 }
 
