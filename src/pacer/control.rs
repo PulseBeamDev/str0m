@@ -38,8 +38,16 @@ impl PacerControl {
     ///
     /// Note the estimate only ever *caps* the padding rate, matching libWebRTC's
     /// `padding_rate = std::min(padding_rate, last_pushback_target_rate_)`.
-    pub fn calculate(&self, current_bitrate: Bitrate, estimate: Bitrate) -> PacingResult {
-        let padding_rate = if current_bitrate.is_zero() {
+    pub fn calculate(
+        &self,
+        current_bitrate: Bitrate,
+        estimate: Bitrate,
+        is_overuse: bool,
+    ) -> PacingResult {
+        // libWebRTC suppresses padding while congested, see `PacingController::PaddingToAdd()`:
+        // `if (congested_) { return DataSize::Zero(); }`. Padding during overuse would only
+        // re-excite a network we already know is struggling.
+        let padding_rate = if is_overuse || current_bitrate.is_zero() {
             Bitrate::ZERO
         } else {
             PADDING_TARGET.min(estimate)
@@ -66,7 +74,7 @@ mod test {
     fn padding_enabled_with_active_media() {
         let c = PacerControl::new();
 
-        let r = c.calculate(Bitrate::kbps(500), Bitrate::kbps(1_000));
+        let r = c.calculate(Bitrate::kbps(500), Bitrate::kbps(1_000), false);
 
         assert_eq!(r.padding_rate, PADDING_TARGET);
     }
@@ -75,7 +83,7 @@ mod test {
     fn no_padding_without_active_media() {
         let c = PacerControl::new();
 
-        let r = c.calculate(Bitrate::ZERO, Bitrate::kbps(1_000));
+        let r = c.calculate(Bitrate::ZERO, Bitrate::kbps(1_000), false);
 
         assert_eq!(r.padding_rate, Bitrate::ZERO);
     }
@@ -86,11 +94,20 @@ mod test {
     fn padding_does_not_scale_with_estimate() {
         let c = PacerControl::new();
 
-        let low = c.calculate(Bitrate::kbps(500), Bitrate::kbps(800));
-        let high = c.calculate(Bitrate::kbps(500), Bitrate::mbps(10));
+        let low = c.calculate(Bitrate::kbps(500), Bitrate::kbps(800), false);
+        let high = c.calculate(Bitrate::kbps(500), Bitrate::mbps(10), false);
 
         assert_eq!(low.padding_rate, PADDING_TARGET);
         assert_eq!(high.padding_rate, PADDING_TARGET);
+    }
+
+    #[test]
+    fn overuse_suppresses_padding() {
+        let c = PacerControl::new();
+
+        let r = c.calculate(Bitrate::kbps(500), Bitrate::mbps(40), true);
+
+        assert_eq!(r.padding_rate, Bitrate::ZERO);
     }
 
     /// A very low estimate caps padding, mirroring the `last_pushback_target_rate_` clamp.
@@ -99,7 +116,7 @@ mod test {
         let c = PacerControl::new();
         let estimate = Bitrate::kbps(20);
 
-        let r = c.calculate(Bitrate::kbps(500), estimate);
+        let r = c.calculate(Bitrate::kbps(500), estimate, false);
 
         assert_eq!(r.padding_rate, estimate);
     }

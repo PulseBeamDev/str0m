@@ -126,6 +126,10 @@ impl Bwe {
     pub fn current_bitrate(&self) -> Bitrate {
         self.current_bitrate
     }
+
+    pub fn is_overusing(&self) -> bool {
+        self.bwe.is_overusing()
+    }
 }
 
 struct SendSideBandwidthEstimator {
@@ -167,6 +171,14 @@ impl SendSideBandwidthEstimator {
     pub fn on_packet_sent(&mut self, bytes: DataSize, now: Instant) {
         debug_assert!(bytes > DataSize::ZERO);
         self.alr_detector.on_bytes_sent(bytes, now);
+    }
+
+    /// Whether the delay-based detector currently signals overuse.
+    ///
+    /// Used to gate padding, mirroring the `congested_` check in libWebRTC's
+    /// `PacingController::PaddingToAdd()`.
+    pub fn is_overusing(&self) -> bool {
+        self.delay_controller.is_overusing()
     }
 
     /// Record a packet from a TWCC report.

@@ -1102,8 +1102,11 @@ impl Session {
             return;
         };
         let current_bitrate = bwe.current_bitrate();
+        let is_overuse = bwe.is_overusing();
 
-        let result = self.pacer_control.calculate(current_bitrate, current_estimate);
+        let result = self
+            .pacer_control
+            .calculate(current_bitrate, current_estimate, is_overuse);
 
         self.pacer.set_padding_rate(result.padding_rate);
         self.pacer.set_pacing_rate(result.pacing_rate);
