@@ -312,11 +312,6 @@ impl ProbeControl {
 
         // Estimate must exceed 70% of last probe rate to trigger further probing.
         if estimate < last.further {
-            trace!(
-                estimate_bps = estimate.as_f64() as u64,
-                further_threshold_bps = last.further.as_f64() as u64,
-                "Exponential probe: estimate below further_threshold, waiting"
-            );
             return false;
         }
 
