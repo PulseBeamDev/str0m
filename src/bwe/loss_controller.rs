@@ -87,9 +87,6 @@ pub struct LossController {
 
     /// Link capacity estimate from probes during ALR
     link_capacity_estimate: Option<Bitrate>,
-
-    /// Previous ALR state to detect transitions
-    was_in_alr: bool,
 }
 
 /// State of the Loss Controller
@@ -145,7 +142,6 @@ impl LossController {
 
             alr_start_time: None,
             link_capacity_estimate: None,
-            was_in_alr: false,
 
             config,
         };
@@ -177,24 +173,8 @@ impl LossController {
         self.acknowledged_bitrate = acknowledged_bitrate;
     }
 
-    /// Set ALR start time from the ALR detector.
     pub fn set_alr_start_time(&mut self, alr_start: Option<Instant>) {
-        let was_in_alr = self.was_in_alr;
-        let is_in_alr = alr_start.is_some();
-
-        // Detect ALR state transition
-        if was_in_alr != is_in_alr {
-            // Reset observations on ALR transition to avoid mixing
-            // ALR and non-ALR traffic in the same observation window
-            self.reset_observations();
-            trace!(
-                "LossController: ALR state changed (was: {}, now: {}), observations reset",
-                was_in_alr, is_in_alr
-            );
-        }
-
         self.alr_start_time = alr_start;
-        self.was_in_alr = is_in_alr;
     }
 
     /// Set link capacity estimate from successful ALR probes.
@@ -205,23 +185,6 @@ impl LossController {
     /// Check if currently in ALR state
     fn is_in_alr(&self) -> bool {
         self.alr_start_time.is_some()
-    }
-
-    /// Reset all observations.
-    ///
-    /// Called when ALR state transitions to avoid mixing traffic patterns
-    /// from different network utilization regimes.
-    fn reset_observations(&mut self) {
-        self.partial_observation = PartialObservation::new();
-        self.last_send_time_most_recent_observation = Timestamp::DistantFuture;
-
-        // Clear observation window
-        for observation in self.observations.iter_mut() {
-            *observation = Observation::DUMMY;
-        }
-
-        // Reset cached values that depend on observations
-        self.cached_instant_upper_bound = None;
     }
 
     /// Update the estimate using TWCC feedback from the network.
@@ -373,6 +336,20 @@ impl LossController {
         self.set_state(new_state);
 
         self.current_estimate = best_candidate;
+
+        // The state change alone does not say which term bound the estimate. Log the operands so
+        // a trace can distinguish the loss controller backing off from it merely relaying a
+        // delay-based value that was already capped upstream.
+        trace!(
+            loss_limited_bps = self.current_estimate.loss_limited_bandwidth.as_f64() as u64,
+            delay_based_bps = self.delay_based_estimate.as_f64() as u64,
+            acked_bps = self.acknowledged_bitrate.as_f64() as u64,
+            upper_bound_bps = self.get_instant_upper_bound().as_f64() as u64,
+            inherent_loss = self.current_estimate.inherent_loss,
+            ?new_state,
+            "Loss controller estimate"
+        );
+
         log_inherent_loss!(self.current_estimate.inherent_loss);
         log_loss_based_bitrate_estimate!(self.current_estimate.loss_limited_bandwidth.as_f64());
 
