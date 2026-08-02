@@ -24,6 +24,12 @@ const MAX_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 /// Matches WebRTC's `kMaxValidRatio`.
 const MAX_VALID_RATIO: f64 = 2.0;
 
+/// Minimum fraction of a cluster's target bitrate we must actually have sent at for its result
+/// to say anything about that target. See the rejection site for the measurements behind it -
+/// delivered probes land at 94-121% and starved ones at 22-40%, so the threshold sits in a wide
+/// empty gap rather than on a cliff.
+const MIN_PROBE_DELIVERY_RATIO: f64 = 0.5;
+
 /// Minimum |receive rate| / |send rate| ratio to consider the link unsaturated.
 /// Matches WebRTC's `kMinRatioForUnsaturatedLink`.
 const MIN_RATIO_FOR_UNSATURATED_LINK: f64 = 0.9;
@@ -290,8 +296,28 @@ impl ProbeEstimatorState {
             return None;
         };
 
-        // Log the estimates continuously during the probe.
-        trace!(%result, "Probe result");
+        // Log the estimates continuously during the probe, with enough detail to tell a genuine
+        // capacity reading from a probe the pacer failed to deliver: if `send_ms` greatly exceeds
+        // the cluster's intended duration, the rate measured is our own padding throughput rather
+        // than the link's.
+        trace!(
+            %result,
+            target_bps = self.config.target_bitrate().as_f64() as u64,
+            sent_bytes = self.total_bytes.as_bytes_usize(),
+            target_bytes = self.config.target_bytes().as_bytes_usize(),
+            packets = self.packet_count,
+            send_ms = self
+                .last_send_time
+                .zip(self.first_send_time)
+                .map(|(l, f)| l.saturating_duration_since(f).as_millis())
+                .unwrap_or(0),
+            recv_ms = self
+                .last_recv_time
+                .zip(self.first_recv_time)
+                .map(|(l, f)| l.saturating_duration_since(f).as_millis())
+                .unwrap_or(0),
+            "Probe result"
+        );
         log_probe_bitrate_estimate!(bitrate.as_f64());
 
         Some((self.config, bitrate))
@@ -383,6 +409,32 @@ impl ProbeEstimatorState {
             };
         }
 
+        // Reject a cluster the pacer could not emit anywhere near its target rate.
+        //
+        // A probe only tells us something about its target bitrate if we actually sent at that
+        // bitrate. When we do not, `send_rate` measures our own emission rate, and reporting it
+        // asserts a link limit we never tested - which then *lowers* the estimate.
+        //
+        // This is specific to str0m's pacer, which emits one packet per `handle_timeout` round
+        // trip (`needs_timeout_before_next_poll` in `pacer/leaky.rs`). libWebRTC builds a whole
+        // burst inside one `ProcessPackets` call and so cannot hit this. The packet count is what
+        // bounds us, so a cluster filled from an RTX cache of small packets cannot reach a high
+        // target however long it runs. Production, static screen share, same connection:
+        //
+        //   target 3.2Mbps -> 6 packets of ~1050B -> sent at 3.9Mbps (121%) -> estimate 3.0Mbps
+        //   target 5.6Mbps -> 66 packets of ~160B -> sent at 1.2Mbps (22%)  -> estimate 1.0Mbps
+        //
+        // Both ran seconds apart on a link the first proves carries 3Mbps. Left unchecked the
+        // second pins the estimate near 1.4Mbps.
+        let delivery = send_rate.as_f64() / self.config.target_bitrate().as_f64();
+        if delivery < MIN_PROBE_DELIVERY_RATIO {
+            return ProbeResult::UnderDelivered {
+                achieved: send_rate,
+                target: self.config.target_bitrate(),
+                packets: self.packet_count,
+            };
+        }
+
         // Match WebRTC semantics:
         // - estimate is the min(send_rate, recv_rate)
         // - if recv_rate is significantly lower than send_rate, assume saturation and
@@ -417,6 +469,13 @@ enum ProbeResult {
     SendIntervalInvalid { interval: Duration },
     /// Receive interval invalid (zero or > 1 second)
     RecvIntervalInvalid { interval: Duration },
+    /// The pacer never reached the cluster's target rate, so the result describes our own
+    /// emission rate rather than the link.
+    UnderDelivered {
+        achieved: Bitrate,
+        target: Bitrate,
+        packets: usize,
+    },
     /// Invalid receive/send ratio (recv_rate / send_rate too high)
     InvalidSendReceiveRatio { ratio: f64, limit: f64 },
     /// Calculated data size is zero
@@ -455,6 +514,20 @@ impl fmt::Display for ProbeResult {
             }
             ProbeResult::RecvIntervalInvalid { interval } => {
                 write!(f, "recv interval invalid ({:?})", interval)
+            }
+            ProbeResult::UnderDelivered {
+                achieved,
+                target,
+                packets,
+            } => {
+                write!(
+                    f,
+                    "under-delivered: sent at {} of {} target ({:.0}%) across {} packets",
+                    achieved,
+                    target,
+                    achieved.as_f64() / target.as_f64() * 100.0,
+                    packets
+                )
             }
             ProbeResult::InvalidSendReceiveRatio { ratio, limit } => {
                 write!(f, "invalid receive/send ratio ({ratio:.3} > {limit:.3})")
@@ -592,6 +665,80 @@ mod test {
             results.is_empty(),
             "probe should be rejected by ratio validation, got: {:?}",
             results
+        );
+    }
+
+    /// Build a cluster of `n` packets of `size` bytes emitted `spacing_us` apart.
+    fn probe_records(
+        cluster: TwccClusterId,
+        base: Instant,
+        n: u64,
+        size: usize,
+        spacing_us: u64,
+    ) -> Vec<crate::rtp_::TwccSendRecord> {
+        (0..n)
+            .map(|i| {
+                let seq: TwccSeq = (7000 + i).into();
+                let pid = TwccPacketId::with_cluster(seq, cluster);
+                let send = base + Duration::from_micros(i * spacing_us);
+                crate::rtp_::TwccSendRecord::test_new(
+                    pid,
+                    send,
+                    size,
+                    send + Duration::from_millis(10),
+                    Some(send + Duration::from_millis(10)),
+                )
+            })
+            .collect()
+    }
+
+    /// A cluster the pacer could not emit near its target rate must not produce an estimate.
+    ///
+    /// Such a result measures our own emission rate, not the link, and because it lands far below
+    /// the true capacity it drags the estimate down. Taken from production, static screen share:
+    /// a 5.6 Mbps cluster filled from an RTX cache of ~160 byte packets took 66 packets and 68ms,
+    /// an achieved rate of 1.2 Mbps - while a 3.2 Mbps cluster on the same connection seconds
+    /// earlier used ~1050 byte packets, hit 121% of target, and correctly measured 3.0 Mbps.
+    #[test]
+    fn under_delivered_probe_is_rejected() {
+        let mut estimator = ProbeEstimator::new();
+        let cluster: TwccClusterId = 11.into();
+        let config = ProbeClusterConfig::new(cluster, Bitrate::mbps(5), ProbeKind::PeriodicAlr);
+        let base = Instant::now();
+
+        // 66 packets of 160 bytes over ~68ms is ~1.2 Mbps against a 5 Mbps target.
+        let records = probe_records(cluster, base, 66, 160, 1046);
+
+        estimator.probe_start(config, base);
+        let results: Vec<_> = estimator.update(records.iter()).collect();
+
+        assert!(
+            results.is_empty(),
+            "a cluster sent at ~24% of its target must not report an estimate, got: {:?}",
+            results
+        );
+    }
+
+    /// A cluster that did reach its target must still produce an estimate.
+    ///
+    /// Guards the rejection above from swallowing healthy probes - the whole point is that
+    /// well-delivered clusters keep working.
+    #[test]
+    fn delivered_probe_still_produces_estimate() {
+        let mut estimator = ProbeEstimator::new();
+        let cluster: TwccClusterId = 12.into();
+        let config = ProbeClusterConfig::new(cluster, Bitrate::mbps(3), ProbeKind::PeriodicAlr);
+        let base = Instant::now();
+
+        // 6 packets of 1050 bytes over ~14ms is ~3.6 Mbps against a 3 Mbps target.
+        let records = probe_records(cluster, base, 6, 1050, 2800);
+
+        estimator.probe_start(config, base);
+        let results: Vec<_> = estimator.update(records.iter()).collect();
+
+        assert!(
+            !results.is_empty(),
+            "a cluster that reached its target rate must produce an estimate"
         );
     }
 
