@@ -10,6 +10,8 @@ use super::{ProbeClusterConfig, ProbeKind};
 use crate::rtp_::{Bitrate, TwccClusterId};
 use crate::util::{already_happened, not_happening};
 
+use tracing::trace;
+
 // Port notes:
 // This module ports WebRTC's `ProbeController` behavior from:
 // `webrtc/modules/congestion_controller/goog_cc/probe_controller.cc`
@@ -387,7 +389,7 @@ impl ProbeControl {
             return false;
         }
 
-        // Periodic ALR probe at 2× desired (capped by queue_probe to 2× desired anyway).
+        // Periodic ALR probe at 2× desired, capped by queue_probe to 2× desired anyway.
         // Using desired rather than estimate allows discovering higher capacity when
         // the app wants more bandwidth than currently estimated.
         let target = desired * self.config.further_exponential_probe_scale;
@@ -546,6 +548,13 @@ impl ProbeControl {
         // Threshold for further exponential probing (probe_bitrate * 0.7).
         let probe_further = bitrate * self.config.further_probe_threshold;
 
+        trace!(
+            ?kind,
+            target_bps = bitrate.as_f64() as u64,
+            further_threshold_bps = probe_further.as_f64() as u64,
+            "Probe queued"
+        );
+
         self.pending.push_back(config);
         self.last_probe = Some(LastProbe {
             when: now,
@@ -558,8 +567,18 @@ impl ProbeControl {
     fn compute_next_timeout(&mut self, now: Instant) -> Instant {
         // Exponential probing: wait for probe result before re-probing at same estimate.
         // This handles the case where we sent a probe but haven't received updated estimate yet.
+        // WebRTC starts these with `probe_further = true`, which parks the controller in
+        // `kWaitingForProbingResult`; `SetEstimatedBitrate` then chains the next probe as soon as
+        // a result arrives. Periodic ALR probes are started that way too
+        // (`InitiateProbing(at_time, {...}, /*probe_further=*/true)` in `Process`), so they must
+        // get the same short reschedule. Letting them fall through to the ALR branch below
+        // throttles the exponential chain to one step per `MIN_TIME_BETWEEN_ALR_PROBES`, which is
+        // what makes ramp-up crawl while application limited.
         if let Some(last) = &self.last_probe {
-            if matches!(last.kind, ProbeKind::Initial | ProbeKind::Exponential) {
+            if matches!(
+                last.kind,
+                ProbeKind::Initial | ProbeKind::Exponential | ProbeKind::PeriodicAlr
+            ) {
                 if self.scheduled_exponential.is_none() {
                     self.scheduled_exponential = Some(now + MAX_WAITING_TIME_FOR_PROBING_RESULT);
                 }
