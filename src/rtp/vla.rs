@@ -1163,3 +1163,57 @@ mod test {
         );
     }
 }
+
+#[cfg(test)]
+mod roundtrip_tests {
+    use super::*;
+    use crate::rtp::ExtensionSerializer;
+
+    /// A realistic single-layer allocation must survive the wire unchanged.
+    ///
+    /// The existing tests all use values below 32 (1, 2, 4, 8, 16), which every plausible
+    /// encoding preserves. Real senders declare thousands of kbps: a screen share at 2500, a
+    /// camera layer at 1250. A round-trip that quietly rescales those is invisible at single
+    /// digits and changes every allocation decision downstream.
+    #[test]
+    fn realistic_layer_bitrates_survive_a_round_trip() {
+        for kbps in [250u64, 437, 1250, 2500, 8000] {
+            let vla = VideoLayersAllocation {
+                current_simulcast_stream_index: 0,
+                simulcast_streams: vec![SimulcastStreamAllocation {
+                    spatial_layers: vec![SpatialLayerAllocation {
+                        temporal_layers: vec![TemporalLayerAllocation {
+                            cumulative_kbps: kbps,
+                        }],
+                        resolution_and_framerate: None,
+                    }],
+                }],
+            };
+
+            let mut ev = ExtensionValues::default();
+            ev.user_values.set(vla.clone());
+
+            let mut buf = [0u8; 64];
+            let written = Serializer.write_to(&mut buf, &ev);
+            assert!(written > 0, "{kbps} kbps produced an empty extension");
+
+            let mut out = ExtensionValues::default();
+            assert!(
+                Serializer.parse_value(&buf[..written], &mut out),
+                "{kbps} kbps failed to parse back"
+            );
+            let parsed = out
+                .user_values
+                .get::<VideoLayersAllocation>()
+                .expect("parsed allocation");
+
+            let got = parsed.simulcast_streams[0].spatial_layers[0].temporal_layers[0]
+                .cumulative_kbps;
+            assert_eq!(
+                got, kbps,
+                "declared {kbps} kbps, read back {got}; every allocation decision downstream is \
+                 priced off this number"
+            );
+        }
+    }
+}
