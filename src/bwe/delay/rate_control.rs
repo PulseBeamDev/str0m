@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use super::super::macros::log_rate_control_applied_change;
 use super::super::macros::log_rate_control_observed_bitrate;
 use super::super::macros::log_rate_control_state;
+use super::super::link_capacity_estimator::LinkCapacityEstimator;
 use crate::rtp_::Bitrate;
 use crate::util::MovingAverage;
 
@@ -23,6 +24,7 @@ const MAX_ESTIMATE_RATIO: f64 = 1.5;
 const DEFAULT_BACKOFF_TIME: Duration = Duration::from_millis(100);
 /// Number of standard deviations below mean to reset observed bitrate average.
 const OBSERVED_BITRATE_RESET_THRESHOLD_STD: f64 = 3.0;
+
 
 /// A type used to estimates a suitable send bitrate.
 ///
@@ -45,6 +47,11 @@ pub struct RateControl {
     last_estimate_update: Option<Instant>,
     // Last RTT estimate in micro-seconds
     last_rtt: Option<Duration>,
+    /// Whether the sender is currently application limited.
+    in_alr: bool,
+    /// What probing has established the link can carry. Held here rather than passed in so that
+    /// overuse can feed it, which is what stops the backoff floor going stale.
+    link_capacity: LinkCapacityEstimator,
 }
 
 impl RateControl {
@@ -62,7 +69,20 @@ impl RateControl {
             averaged_observed_bitrate: MovingAverage::new(OBSERVED_BIT_RATE_SMOOTHING_FACTOR),
             last_estimate_update: None,
             last_rtt: None,
+            in_alr: false,
+            link_capacity: LinkCapacityEstimator::new(),
         }
+    }
+
+    /// Whether the sender is application limited, i.e. sending less than the link could carry
+    /// because it has nothing more to send.
+    pub fn set_in_alr(&mut self, in_alr: bool) {
+        self.in_alr = in_alr;
+    }
+
+    /// Record a capacity measured by probing.
+    pub fn on_probe_capacity(&mut self, capacity: Bitrate, now: Instant) {
+        self.link_capacity.update_from_probe(capacity, now);
     }
 
     /// Update with input from the delay controller.
@@ -175,6 +195,10 @@ impl RateControl {
     /// WebRTC does NOT change the rate control state when applying a probe - the state
     /// remains unchanged to avoid triggering unintended AIMD behavior.
     pub fn set_probe_result(&mut self, probe_bitrate: Bitrate, now: Instant) {
+        // A probe result is a direct measurement of the link, which is what the backoff floor is
+        // built from.
+        self.link_capacity.update_from_probe(probe_bitrate, now);
+
         // WebRTC calls SetEstimate() directly without filtering by current estimate
         // or changing the rate control state. Accept the probe result unconditionally
         // (update_estimate handles clamping to min/max bounds).
@@ -248,6 +272,34 @@ impl RateControl {
     fn decrease(&mut self, observed_bitrate: Bitrate, now: Instant) {
         log_rate_control_applied_change!("decrease");
         let mut new_estimate = observed_bitrate * BETA;
+
+        // Backing off to the observed rate assumes that rate is what the link would carry.
+        // That holds when the sender is trying to send more than it can, and not otherwise: under
+        // ALR the sender is application limited, so the observed rate describes the *source* and
+        // says nothing about capacity.
+        //
+        // Taking it as capacity anyway collapses the estimate to whatever the application
+        // happened to be sending. Measured on a still screen share over an idle 3 Mbps link that
+        // dropped nothing: 2151619 -> 133499 bps, a 94% cut, off an acked rate of ~140 kbps that
+        // was simply all the encoder produced. Recovery is then additive at 1 kbps per update, so
+        // it does not return within a call - the viewer's stream is gone for good.
+        //
+        // So the backoff is floored at what probing has established the link can carry, taking
+        // the *lower* bound rather than the estimate: three standard deviations down, so the
+        // floor only asserts itself when capacity is well measured and gets out of the way when
+        // it is not. This is libWebRTC's `estimate_bounded_backoff_`.
+        //
+        // The floor cannot go stale, which an earlier attempt at this got wrong. Every overuse
+        // feeds the capacity estimator (below), so a link that genuinely degrades walks the floor
+        // down with it; only an isolated application-limited blip leaves it high. Without that
+        // feedback the floor blocks legitimate backoff on a degrading link, which
+        // `estimate_recovers_after_capacity_restoration` catches.
+        if self.in_alr && let Some(lower) = self.link_capacity.lower_bound(now) {
+            new_estimate = new_estimate.max(lower * BETA);
+        }
+
+        // Overuse is evidence about capacity, weighted lightly - see LinkCapacityEstimator.
+        self.link_capacity.on_overuse_detected(observed_bitrate, now);
 
         if self.estimated_bitrate < new_estimate {
             // Avoid increasing the bitrate on overuse

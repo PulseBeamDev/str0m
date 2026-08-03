@@ -321,6 +321,12 @@ impl SendSideBandwidthEstimator {
         self.loss_controller
             .set_link_capacity_estimate(link_capacity);
 
+        // The delay controller needs to know this too. Without it a backoff has only the acked
+        // rate to go on, which under ALR describes the source rather than the link. It keeps its
+        // own capacity estimate, fed by probe results and by overuse.
+        self.delay_controller
+            .set_in_alr(alr_start_time.is_some());
+
         // Clean up expired probe cluster state
         self.probe_estimator.handle_timeout(now);
 

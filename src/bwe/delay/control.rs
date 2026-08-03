@@ -105,6 +105,11 @@ impl DelayController {
         self.last_estimate
     }
 
+    /// Whether the sender is application limited, which decides how a backoff is interpreted.
+    pub fn set_in_alr(&mut self, in_alr: bool) {
+        self.rate_control.set_in_alr(in_alr);
+    }
+
     pub fn poll_timeout(&self) -> Instant {
         self.next_timeout
     }
