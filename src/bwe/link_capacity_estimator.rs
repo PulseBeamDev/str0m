@@ -141,12 +141,6 @@ impl LinkCapacityEstimator {
             .unwrap_or_else(|| "none".to_string())
     }
 
-    /// Reset the capacity estimate.
-    #[cfg(test)]
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-
     /// Whether any estimate has been recorded.
     #[cfg(test)]
     pub fn has_estimate(&self) -> bool {

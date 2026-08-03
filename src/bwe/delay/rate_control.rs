@@ -80,11 +80,6 @@ impl RateControl {
         self.in_alr = in_alr;
     }
 
-    /// Record a capacity measured by probing.
-    pub fn on_probe_capacity(&mut self, capacity: Bitrate, now: Instant) {
-        self.link_capacity.update_from_probe(capacity, now);
-    }
-
     /// Update with input from the delay controller.
     pub fn update(
         &mut self,
