@@ -559,7 +559,10 @@ impl ProbeControl {
         // Exponential probing: wait for probe result before re-probing at same estimate.
         // This handles the case where we sent a probe but haven't received updated estimate yet.
         if let Some(last) = &self.last_probe {
-            if matches!(last.kind, ProbeKind::Initial | ProbeKind::Exponential) {
+            if matches!(
+                last.kind,
+                ProbeKind::Initial | ProbeKind::Exponential | ProbeKind::PeriodicAlr
+            ) {
                 if self.scheduled_exponential.is_none() {
                     self.scheduled_exponential = Some(now + MAX_WAITING_TIME_FOR_PROBING_RESULT);
                 }

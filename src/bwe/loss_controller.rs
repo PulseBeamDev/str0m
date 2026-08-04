@@ -20,9 +20,7 @@ use super::time::{TimeDelta, Timestamp};
 ///
 /// The controller integrates with ALR (Application Limited Region) detection and link capacity
 /// tracking. When in ALR, it uses proven link capacity from successful ALR probes as an upper
-/// bound on estimates, preventing overestimation in application-limited scenarios. When
-/// transitioning into or out of ALR, the controller resets its observation window to avoid
-/// mixing traffic patterns from different network utilization regimes.
+/// bound on estimates, preventing overestimation in application-limited scenarios.
 ///
 /// The estimate is bounded by the output of the delay-based estimator, meaning this controller
 /// can only reduce estimates (acting as a safety cap), not increase them.
@@ -87,9 +85,6 @@ pub struct LossController {
 
     /// Link capacity estimate from probes during ALR
     link_capacity_estimate: Option<Bitrate>,
-
-    /// Previous ALR state to detect transitions
-    was_in_alr: bool,
 }
 
 /// State of the Loss Controller
@@ -145,7 +140,6 @@ impl LossController {
 
             alr_start_time: None,
             link_capacity_estimate: None,
-            was_in_alr: false,
 
             config,
         };
@@ -179,22 +173,7 @@ impl LossController {
 
     /// Set ALR start time from the ALR detector.
     pub fn set_alr_start_time(&mut self, alr_start: Option<Instant>) {
-        let was_in_alr = self.was_in_alr;
-        let is_in_alr = alr_start.is_some();
-
-        // Detect ALR state transition
-        if was_in_alr != is_in_alr {
-            // Reset observations on ALR transition to avoid mixing
-            // ALR and non-ALR traffic in the same observation window
-            self.reset_observations();
-            trace!(
-                "LossController: ALR state changed (was: {}, now: {}), observations reset",
-                was_in_alr, is_in_alr
-            );
-        }
-
         self.alr_start_time = alr_start;
-        self.was_in_alr = is_in_alr;
     }
 
     /// Set link capacity estimate from successful ALR probes.
@@ -205,23 +184,6 @@ impl LossController {
     /// Check if currently in ALR state
     fn is_in_alr(&self) -> bool {
         self.alr_start_time.is_some()
-    }
-
-    /// Reset all observations.
-    ///
-    /// Called when ALR state transitions to avoid mixing traffic patterns
-    /// from different network utilization regimes.
-    fn reset_observations(&mut self) {
-        self.partial_observation = PartialObservation::new();
-        self.last_send_time_most_recent_observation = Timestamp::DistantFuture;
-
-        // Clear observation window
-        for observation in self.observations.iter_mut() {
-            *observation = Observation::DUMMY;
-        }
-
-        // Reset cached values that depend on observations
-        self.cached_instant_upper_bound = None;
     }
 
     /// Update the estimate using TWCC feedback from the network.

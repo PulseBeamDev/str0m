@@ -41,6 +41,8 @@ use macros::log_loss;
 use smoother::EstimateSmoother;
 
 pub(crate) use macros::{log_pacer_media_debt, log_pacer_padding_debt};
+#[cfg(test)]
+pub(crate) use probe::ProbeKind;
 pub(crate) use probe::{BandwidthLimitedCause, ProbeEstimator};
 pub(crate) use probe::{ProbeClusterState, ProbeControl};
 
@@ -55,6 +57,7 @@ const STARTUP_PHASE: Duration = Duration::from_secs(2);
 
 pub struct Bwe {
     bwe: SendSideBandwidthEstimator,
+    current_bitrate: Bitrate,
     desired_bitrate: Bitrate,
     smoother: EstimateSmoother,
 }
@@ -64,6 +67,7 @@ impl Bwe {
         let send_side_bwe = SendSideBandwidthEstimator::new(initial);
         Bwe {
             bwe: send_side_bwe,
+            current_bitrate: Bitrate::ZERO,
             desired_bitrate: Bitrate::ZERO,
             smoother: EstimateSmoother::new(),
         }
@@ -109,19 +113,25 @@ impl Bwe {
         self.bwe.last_estimate()
     }
 
-    pub fn on_media_sent(&mut self, payload_size: DataSize, is_padding: bool, now: Instant) {
-        if !is_padding {
-            // Update ALR detector with media bytes sent
-            self.bwe.on_media_sent(payload_size, now);
-        }
-    }
-
-    pub fn is_overusing(&self) -> bool {
-        self.bwe.is_overusing()
+    pub fn on_packet_sent(&mut self, payload_size: DataSize, now: Instant) {
+        self.bwe.on_packet_sent(payload_size, now);
     }
 
     pub fn set_desired_bitrate(&mut self, v: Bitrate) {
         self.desired_bitrate = v;
+    }
+
+    pub fn set_current_bitrate(&mut self, v: Bitrate) {
+        debug_assert!(v.is_valid());
+        self.current_bitrate = v;
+    }
+
+    pub fn current_bitrate(&self) -> Bitrate {
+        self.current_bitrate
+    }
+
+    pub fn is_overusing(&self) -> bool {
+        self.bwe.is_overusing()
     }
 }
 
@@ -161,20 +171,17 @@ impl SendSideBandwidthEstimator {
         }
     }
 
+    pub fn on_packet_sent(&mut self, bytes: DataSize, now: Instant) {
+        debug_assert!(bytes > DataSize::ZERO);
+        self.alr_detector.on_bytes_sent(bytes, now);
+    }
+
     /// Whether the delay-based detector currently signals overuse.
     ///
     /// This is useful for gating behaviors (like padding/probing) that would otherwise
     /// re-excite the system while we're already congested.
     pub fn is_overusing(&self) -> bool {
         self.delay_controller.is_overusing()
-    }
-
-    /// Update ALR detector with actual bytes sent.
-    ///
-    /// Should be called for media packets (not padding/probes).
-    /// This is typically called from the session's packet sending logic.
-    pub fn on_media_sent(&mut self, bytes: DataSize, now: Instant) {
-        self.alr_detector.on_bytes_sent(bytes, now);
     }
 
     /// Record a packet from a TWCC report.
@@ -221,7 +228,13 @@ impl SendSideBandwidthEstimator {
         let acked_bitrate = self.acked_bitrate_estimator.current_estimate();
 
         // Use the latest probe result from this update, if any
-        let probe_result = latest_probe_result;
+        let probe_result = latest_probe_result.map(|bitrate| {
+            limit_probe_bitrate(
+                bitrate,
+                acked_bitrate,
+                self.delay_controller.last_estimate(),
+            )
+        });
 
         let is_probe_result = probe_result.is_some();
 
@@ -445,6 +458,25 @@ fn in_startup_phase(started_at: Option<Instant>, now: Instant) -> bool {
     started_at
         .map(|s| now.duration_since(s) <= STARTUP_PHASE)
         .unwrap_or(false)
+}
+
+fn limit_probe_bitrate(
+    probe_bitrate: Bitrate,
+    acknowledged_bitrate: Option<Bitrate>,
+    delay_estimate: Option<Bitrate>,
+) -> Bitrate {
+    debug_assert!(probe_bitrate.is_valid());
+    debug_assert!(acknowledged_bitrate.is_none_or(|bitrate| bitrate.is_valid()));
+    debug_assert!(delay_estimate.is_none_or(|bitrate| bitrate.is_valid()));
+
+    let Some(acknowledged_bitrate) = acknowledged_bitrate else {
+        return probe_bitrate;
+    };
+    let Some(delay_estimate) = delay_estimate else {
+        return probe_bitrate;
+    };
+
+    probe_bitrate.max(delay_estimate.min(acknowledged_bitrate * 0.85))
 }
 
 impl TryFrom<&TwccSendRecord> for AckedPacket {
