@@ -47,6 +47,7 @@ pub struct LeakyBucketPacer {
     completed_probe: Option<TwccClusterId>,
     /// Gates poll_queue() until handle_timeout() is called after packet emission.
     needs_timeout_before_next_poll: bool,
+    probe_burst: Option<(MidRid, DataSize)>,
     /// Caches whether we have any queue to send padding on (RTX).
     has_padding_queue: bool,
 }
@@ -98,6 +99,9 @@ impl Pacer for LeakyBucketPacer {
         self.maybe_update_adjusted_bitrate(now);
 
         if let Some(request) = self.maybe_create_padding_request(now) {
+            if self.active_cluster().is_some() {
+                self.probe_burst = Some((request.midrid, DataSize::bytes(request.padding as i64)));
+            }
             self.next_poll_queue = Some(request.midrid);
             return Some(request);
         }
@@ -155,6 +159,17 @@ impl Pacer for LeakyBucketPacer {
             probe.record_packet(now, packet_size);
         }
 
+        if let Some((midrid, remaining)) = self.probe_burst.as_mut() {
+            *remaining = remaining.saturating_sub(packet_size);
+            if *remaining > DataSize::ZERO {
+                self.next_poll_queue = Some(*midrid);
+                self.needs_timeout_before_next_poll = false;
+                self.next_poll_time = None;
+            } else {
+                self.probe_burst = None;
+            }
+        }
+
         // Check if probe is complete and store it for later retrieval
         if let Some(cluster_id) = self.check_probe_complete_internal(now) {
             self.completed_probe = Some(cluster_id);
@@ -185,6 +200,7 @@ impl LeakyBucketPacer {
             probe_queue: VecDeque::new(),
             completed_probe: None,
             needs_timeout_before_next_poll: true,
+            probe_burst: None,
             has_padding_queue: false,
         }
     }
@@ -422,6 +438,7 @@ impl LeakyBucketPacer {
         if !self.has_padding_queue {
             // No padding queue, no probes.
             self.probe_queue.clear();
+            self.probe_burst = None;
         }
 
         let queue = maybe_queue?;
