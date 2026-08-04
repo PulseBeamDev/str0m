@@ -109,11 +109,8 @@ impl Bwe {
         self.bwe.last_estimate()
     }
 
-    pub fn on_media_sent(&mut self, payload_size: DataSize, is_padding: bool, now: Instant) {
-        if !is_padding {
-            // Update ALR detector with media bytes sent
-            self.bwe.on_media_sent(payload_size, now);
-        }
+    pub fn on_packet_sent(&mut self, payload_size: DataSize, now: Instant) {
+        self.bwe.on_packet_sent(payload_size, now);
     }
 
     pub fn is_overusing(&self) -> bool {
@@ -161,20 +158,16 @@ impl SendSideBandwidthEstimator {
         }
     }
 
+    pub fn on_packet_sent(&mut self, bytes: DataSize, now: Instant) {
+        self.alr_detector.on_bytes_sent(bytes, now);
+    }
+
     /// Whether the delay-based detector currently signals overuse.
     ///
     /// This is useful for gating behaviors (like padding/probing) that would otherwise
     /// re-excite the system while we're already congested.
     pub fn is_overusing(&self) -> bool {
         self.delay_controller.is_overusing()
-    }
-
-    /// Update ALR detector with actual bytes sent.
-    ///
-    /// Should be called for media packets (not padding/probes).
-    /// This is typically called from the session's packet sending logic.
-    pub fn on_media_sent(&mut self, bytes: DataSize, now: Instant) {
-        self.alr_detector.on_bytes_sent(bytes, now);
     }
 
     /// Record a packet from a TWCC report.
