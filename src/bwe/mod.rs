@@ -111,8 +111,10 @@ impl Bwe {
         self.bwe.last_estimate()
     }
 
-    pub fn on_packet_sent(&mut self, payload_size: DataSize, now: Instant) {
-        self.bwe.on_packet_sent(payload_size, now);
+    pub fn on_media_sent(&mut self, payload_size: DataSize, is_padding: bool, now: Instant) {
+        if !is_padding {
+            self.bwe.on_media_sent(payload_size, now);
+        }
     }
 
     pub fn is_overusing(&self) -> bool {
@@ -168,7 +170,7 @@ impl SendSideBandwidthEstimator {
         }
     }
 
-    pub fn on_packet_sent(&mut self, bytes: DataSize, now: Instant) {
+    pub fn on_media_sent(&mut self, bytes: DataSize, now: Instant) {
         self.alr_detector.on_bytes_sent(bytes, now);
     }
 

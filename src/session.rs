@@ -952,7 +952,7 @@ impl Session {
         }
 
         if let Some(bwe) = self.bwe.as_mut() {
-            bwe.on_packet_sent(payload_size.into(), now);
+            bwe.on_media_sent(payload_size.into(), is_padding, now);
         }
 
         if !is_padding && !header.ssrc.is_probe() {
