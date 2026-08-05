@@ -27,17 +27,19 @@ impl PacerControl {
 
     pub fn calculate(
         &self,
-        current_bitrate: Bitrate,
+        current_bitrate: Option<Bitrate>,
+        has_active_media: bool,
         estimate: Bitrate,
         is_overuse: bool,
     ) -> PacingResult {
-        let padding_rate = if is_overuse || current_bitrate.is_zero() {
+        let padding_enabled = current_bitrate.map_or(has_active_media, |v| !v.is_zero());
+        let padding_rate = if is_overuse || !padding_enabled {
             Bitrate::ZERO
         } else {
             PADDING_TARGET.min(estimate)
         };
 
-        let min_pacing_rate = current_bitrate.max(estimate) * PACING_FACTOR;
+        let min_pacing_rate = current_bitrate.unwrap_or(estimate).max(estimate) * PACING_FACTOR;
         let pacing_rate = min_pacing_rate.max(padding_rate);
 
         PacingResult {
@@ -55,7 +57,7 @@ mod test {
     fn padding_enabled_with_active_media() {
         let c = PacerControl::new();
 
-        let r = c.calculate(Bitrate::kbps(500), Bitrate::kbps(1_000), false);
+        let r = c.calculate(None, true, Bitrate::kbps(1_000), false);
 
         assert_eq!(r.padding_rate, PADDING_TARGET);
     }
@@ -64,7 +66,7 @@ mod test {
     fn no_padding_without_active_media() {
         let c = PacerControl::new();
 
-        let r = c.calculate(Bitrate::ZERO, Bitrate::kbps(1_000), false);
+        let r = c.calculate(None, false, Bitrate::kbps(1_000), false);
 
         assert_eq!(r.padding_rate, Bitrate::ZERO);
     }
@@ -73,7 +75,7 @@ mod test {
     fn overuse_suppresses_padding() {
         let c = PacerControl::new();
 
-        let r = c.calculate(Bitrate::kbps(500), Bitrate::mbps(40), true);
+        let r = c.calculate(Some(Bitrate::kbps(500)), true, Bitrate::mbps(40), true);
 
         assert_eq!(r.padding_rate, Bitrate::ZERO);
     }
@@ -82,7 +84,7 @@ mod test {
     fn current_bitrate_acts_as_pacing_floor() {
         let c = PacerControl::new();
 
-        let r = c.calculate(Bitrate::kbps(2_000), Bitrate::kbps(500), false);
+        let r = c.calculate(Some(Bitrate::kbps(2_000)), true, Bitrate::kbps(500), false);
 
         assert_eq!(r.pacing_rate, Bitrate::kbps(2_000) * PACING_FACTOR);
     }
@@ -92,8 +94,17 @@ mod test {
         let c = PacerControl::new();
         let estimate = Bitrate::kbps(20);
 
-        let r = c.calculate(Bitrate::kbps(500), estimate, false);
+        let r = c.calculate(Some(Bitrate::kbps(500)), true, estimate, false);
 
         assert_eq!(r.padding_rate, estimate);
+    }
+
+    #[test]
+    fn explicit_zero_allocation_disables_padding() {
+        let c = PacerControl::new();
+
+        let r = c.calculate(Some(Bitrate::ZERO), true, Bitrate::kbps(1_000), false);
+
+        assert_eq!(r.padding_rate, Bitrate::ZERO);
     }
 }

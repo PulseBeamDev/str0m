@@ -1094,6 +1094,7 @@ impl Session {
     }
 
     fn configure_pacer(&mut self) {
+        let has_active_media = self.has_active_outgoing_media();
         let Some(bwe) = self.bwe.as_mut() else {
             return;
         };
@@ -1104,12 +1105,21 @@ impl Session {
         let current_bitrate = bwe.current_bitrate();
         let is_overuse = bwe.is_overusing();
 
-        let result = self
-            .pacer_control
-            .calculate(current_bitrate, current_estimate, is_overuse);
+        let result = self.pacer_control.calculate(
+            current_bitrate,
+            has_active_media,
+            current_estimate,
+            is_overuse,
+        );
 
         self.pacer.set_padding_rate(result.padding_rate);
         self.pacer.set_pacing_rate(result.pacing_rate);
+    }
+
+    fn has_active_outgoing_media(&self) -> bool {
+        self.medias
+            .iter()
+            .any(|m| m.direction().is_sending() && !m.disabled())
     }
 
     pub fn media_by_mid(&self, mid: Mid) -> Option<&Media> {
