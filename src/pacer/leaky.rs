@@ -196,6 +196,7 @@ impl LeakyBucketPacer {
     pub(crate) fn start_probe(&mut self, config: ProbeClusterConfig) {
         trace!(?config, "Probe start");
         self.probe_queue.push_back(ProbeClusterState::new(config));
+        self.request_immediate_timeout();
     }
 
     /// Get the cluster ID of the active probe, if any.
@@ -485,6 +486,7 @@ impl LeakyBucketPacer {
 mod test {
     use super::super::{QueuePriority, QueueSnapshot};
     use super::*;
+    use crate::bwe_::ProbeKind;
     use crate::rtp_::{DataSize, Mid, RtpHeader};
     use queue::{PacketKind, Queue, QueuedPacket};
     use std::time::{Duration, Instant};
@@ -639,6 +641,35 @@ mod test {
         );
 
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn starting_probe_wakes_pacer() {
+        let now = Instant::now();
+        let midrid = MidRid(Mid::from("0"), None);
+        let queue_state = QueueState {
+            midrid,
+            unpaced: false,
+            use_for_padding: true,
+            snapshot: QueueSnapshot {
+                created_at: now,
+                ..Default::default()
+            },
+        };
+        let mut pacer = LeakyBucketPacer::new(Bitrate::mbps(1));
+        assert_eq!(pacer.padding_bitrate, Bitrate::ZERO);
+        assert!(
+            pacer
+                .handle_timeout(now, std::iter::once(queue_state))
+                .is_none()
+        );
+
+        let config = ProbeClusterConfig::new(1.into(), Bitrate::mbps(2), ProbeKind::Initial);
+        pacer.start_probe(config);
+
+        let wake_at = pacer.poll_timeout().0.expect("probe must wake the pacer");
+        assert!(wake_at > now);
+        assert_eq!(wake_at, now + Duration::from_micros(1));
     }
 
     #[test]
