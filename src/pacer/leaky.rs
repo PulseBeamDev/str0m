@@ -16,10 +16,9 @@ const MAX_BITRATE: Bitrate = Bitrate::gbps(10);
 const MAX_DEBT_IN_TIME: Duration = Duration::from_millis(500);
 const PADDING_BURST_INTERVAL: Duration = Duration::from_millis(5);
 const PACING: Duration = Duration::from_millis(40);
-// Small probe recommendations are already handled well by one output per timeout. Only batch
-// larger recommendations, where four 240-byte blank packets would otherwise add event-loop delay.
-const MIN_PROBE_BURST_BYTES: usize = MAX_BLANK_PADDING_PAYLOAD_SIZE * 4;
-
+// Batch probe recommendations larger than two full blank packets. A single or two-packet
+// recommendation remains on the paced path, which preserves cellular ramp-up.
+const MIN_PROBE_BURST_BYTES: usize = MAX_BLANK_PADDING_PAYLOAD_SIZE * 2;
 /// A leaky bucket pacer that can overshoot the target bitrate when required.
 pub struct LeakyBucketPacer {
     /// Pacing bitrate.
@@ -696,7 +695,7 @@ mod test {
     }
 
     #[test]
-    fn only_large_probe_recommendations_are_batched() {
+    fn probe_recommendations_are_batched() {
         let now = Instant::now();
         let queue_state = QueueState {
             midrid: MidRid(Mid::from("0"), None),
@@ -733,6 +732,18 @@ mod test {
             .expect("high probe should request padding");
         assert_eq!(high_request.padding, 1_400);
         assert!(high.probe_burst.is_some());
+
+        let mut initial = LeakyBucketPacer::new(Bitrate::mbps(2));
+        initial.set_padding_rate(Bitrate::mbps(1));
+        initial.start_probe(ProbeClusterConfig::new(
+            3.into(),
+            Bitrate::kbps(1_500),
+            ProbeKind::Initial,
+        ));
+        initial
+            .handle_timeout(now, std::iter::once(queue_state))
+            .expect("initial probe should request padding");
+        assert!(initial.probe_burst.is_none());
     }
 
     #[test]
