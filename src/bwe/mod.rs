@@ -220,8 +220,14 @@ impl SendSideBandwidthEstimator {
 
         let acked_bitrate = self.acked_bitrate_estimator.current_estimate();
 
-        // Use the latest probe result from this update, if any
-        let probe_result = latest_probe_result;
+        // Use the latest probe result from this update, if any.
+        let probe_result = latest_probe_result.map(|bitrate| {
+            limit_probe_bitrate(
+                bitrate,
+                acked_bitrate,
+                self.delay_controller.last_estimate(),
+            )
+        });
 
         let is_probe_result = probe_result.is_some();
 
@@ -445,6 +451,86 @@ fn in_startup_phase(started_at: Option<Instant>, now: Instant) -> bool {
     started_at
         .map(|s| now.duration_since(s) <= STARTUP_PHASE)
         .unwrap_or(false)
+}
+
+/// Prevent a low probe result from discarding throughput that TWCC already proves the path carries.
+///
+/// The margin below acknowledged throughput still allows queues to drain during overuse. Capping the
+/// floor at the current delay estimate ensures a low probe can never increase the estimate.
+fn limit_probe_bitrate(
+    probe_bitrate: Bitrate,
+    acknowledged_bitrate: Option<Bitrate>,
+    delay_estimate: Option<Bitrate>,
+) -> Bitrate {
+    let Some(acknowledged_bitrate) = acknowledged_bitrate else {
+        return probe_bitrate;
+    };
+    let Some(delay_estimate) = delay_estimate else {
+        return probe_bitrate;
+    };
+
+    probe_bitrate.max(delay_estimate.min(acknowledged_bitrate * 0.85))
+}
+
+#[cfg(test)]
+mod probe_limit_test {
+    use super::*;
+
+    #[test]
+    fn low_probe_is_floored_below_acknowledged_throughput() {
+        let result = limit_probe_bitrate(
+            Bitrate::kbps(400),
+            Some(Bitrate::kbps(1_000)),
+            Some(Bitrate::kbps(900)),
+        );
+
+        assert_eq!(result, Bitrate::kbps(850));
+    }
+
+    #[test]
+    fn floor_is_capped_by_delay_estimate() {
+        let result = limit_probe_bitrate(
+            Bitrate::kbps(400),
+            Some(Bitrate::kbps(1_000)),
+            Some(Bitrate::kbps(700)),
+        );
+
+        assert_eq!(result, Bitrate::kbps(700));
+    }
+
+    #[test]
+    fn limit_never_lowers_or_increases_probe_result() {
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::kbps(900),
+                Some(Bitrate::kbps(1_000)),
+                Some(Bitrate::kbps(800)),
+            ),
+            Bitrate::kbps(900)
+        );
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::kbps(500),
+                Some(Bitrate::kbps(1_000)),
+                Some(Bitrate::kbps(400)),
+            ),
+            Bitrate::kbps(500)
+        );
+    }
+
+    #[test]
+    fn missing_estimates_leave_probe_unchanged() {
+        let probe = Bitrate::kbps(400);
+
+        assert_eq!(
+            limit_probe_bitrate(probe, None, Some(Bitrate::kbps(900))),
+            probe
+        );
+        assert_eq!(
+            limit_probe_bitrate(probe, Some(Bitrate::kbps(1_000)), None),
+            probe
+        );
+    }
 }
 
 impl TryFrom<&TwccSendRecord> for AckedPacket {
