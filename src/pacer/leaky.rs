@@ -9,14 +9,16 @@ use crate::bwe_::ProbeClusterConfig;
 use crate::bwe_::ProbeClusterState;
 use crate::bwe_::{log_pacer_media_debt, log_pacer_padding_debt};
 use crate::pacer::PacerReason;
-use crate::rtp_::{Bitrate, DataSize, MidRid, TwccClusterId};
+use crate::rtp_::{Bitrate, DataSize, MAX_BLANK_PADDING_PAYLOAD_SIZE, MidRid, TwccClusterId};
 use crate::util::Soonest;
 
 const MAX_BITRATE: Bitrate = Bitrate::gbps(10);
 const MAX_DEBT_IN_TIME: Duration = Duration::from_millis(500);
 const PADDING_BURST_INTERVAL: Duration = Duration::from_millis(5);
 const PACING: Duration = Duration::from_millis(40);
-
+// Batch probe recommendations larger than two full blank packets. A single or two-packet
+// recommendation remains on the paced path, which preserves cellular ramp-up.
+const MIN_PROBE_BURST_BYTES: usize = MAX_BLANK_PADDING_PAYLOAD_SIZE * 2;
 /// A leaky bucket pacer that can overshoot the target bitrate when required.
 pub struct LeakyBucketPacer {
     /// Pacing bitrate.
@@ -47,6 +49,8 @@ pub struct LeakyBucketPacer {
     completed_probe: Option<TwccClusterId>,
     /// Gates poll_queue() until handle_timeout() is called after packet emission.
     needs_timeout_before_next_poll: bool,
+    /// Remaining bytes in the current probe recommendation being sent this pass.
+    probe_burst: Option<(MidRid, DataSize)>,
     /// Caches whether we have any queue to send padding on (RTX).
     has_padding_queue: bool,
 }
@@ -98,6 +102,9 @@ impl Pacer for LeakyBucketPacer {
         self.maybe_update_adjusted_bitrate(now);
 
         if let Some(request) = self.maybe_create_padding_request(now) {
+            if self.active_cluster().is_some() && request.padding > MIN_PROBE_BURST_BYTES {
+                self.probe_burst = Some((request.midrid, DataSize::bytes(request.padding as i64)));
+            }
             self.next_poll_queue = Some(request.midrid);
             return Some(request);
         }
@@ -155,6 +162,19 @@ impl Pacer for LeakyBucketPacer {
             probe.record_packet(now, packet_size);
         }
 
+        // libwebrtc's ProcessPackets loop sends the recommended probe size before yielding. Keep
+        // the same bounded loop here so host event-loop latency does not cap high-rate probes.
+        if let Some((midrid, remaining)) = self.probe_burst.as_mut() {
+            *remaining = remaining.saturating_sub(packet_size);
+            if *remaining > DataSize::ZERO {
+                self.next_poll_queue = Some(*midrid);
+                self.needs_timeout_before_next_poll = false;
+                self.next_poll_time = None;
+            } else {
+                self.probe_burst = None;
+            }
+        }
+
         // Check if probe is complete and store it for later retrieval
         if let Some(cluster_id) = self.check_probe_complete_internal(now) {
             self.completed_probe = Some(cluster_id);
@@ -185,6 +205,7 @@ impl LeakyBucketPacer {
             probe_queue: VecDeque::new(),
             completed_probe: None,
             needs_timeout_before_next_poll: true,
+            probe_burst: None,
             has_padding_queue: false,
         }
     }
@@ -421,6 +442,7 @@ impl LeakyBucketPacer {
         if !self.has_padding_queue {
             // No padding queue, no probes.
             self.probe_queue.clear();
+            self.probe_burst = None;
         }
 
         let queue = maybe_queue?;
@@ -670,6 +692,58 @@ mod test {
         let wake_at = pacer.poll_timeout().0.expect("probe must wake the pacer");
         assert!(wake_at > now);
         assert_eq!(wake_at, now + Duration::from_micros(1));
+    }
+
+    #[test]
+    fn probe_recommendations_are_batched() {
+        let now = Instant::now();
+        let queue_state = QueueState {
+            midrid: MidRid(Mid::from("0"), None),
+            unpaced: false,
+            use_for_padding: true,
+            snapshot: QueueSnapshot {
+                created_at: now,
+                ..Default::default()
+            },
+        };
+
+        let mut low = LeakyBucketPacer::new(Bitrate::mbps(2));
+        low.set_padding_rate(Bitrate::mbps(1));
+        low.start_probe(ProbeClusterConfig::new(
+            1.into(),
+            Bitrate::kbps(1_500),
+            ProbeKind::PeriodicAlr,
+        ));
+        let low_request = low
+            .handle_timeout(now, std::iter::once(queue_state.clone()))
+            .expect("low probe should request padding");
+        assert_eq!(low_request.padding, 375);
+        assert!(low.probe_burst.is_none());
+
+        let mut high = LeakyBucketPacer::new(Bitrate::mbps(2));
+        high.set_padding_rate(Bitrate::mbps(1));
+        high.start_probe(ProbeClusterConfig::new(
+            2.into(),
+            Bitrate::kbps(5_600),
+            ProbeKind::PeriodicAlr,
+        ));
+        let high_request = high
+            .handle_timeout(now, std::iter::once(queue_state))
+            .expect("high probe should request padding");
+        assert_eq!(high_request.padding, 1_400);
+        assert!(high.probe_burst.is_some());
+
+        let mut initial = LeakyBucketPacer::new(Bitrate::mbps(2));
+        initial.set_padding_rate(Bitrate::mbps(1));
+        initial.start_probe(ProbeClusterConfig::new(
+            3.into(),
+            Bitrate::kbps(1_500),
+            ProbeKind::Initial,
+        ));
+        initial
+            .handle_timeout(now, std::iter::once(queue_state))
+            .expect("initial probe should request padding");
+        assert!(initial.probe_burst.is_none());
     }
 
     #[test]
