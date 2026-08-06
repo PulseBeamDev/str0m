@@ -18,6 +18,16 @@ pub enum BweKind {
 pub struct Bwe<'a>(pub(crate) &'a mut Rtc);
 
 impl<'a> Bwe<'a> {
+    /// Set the aggregate bitrate currently allocated to outgoing media.
+    ///
+    /// This provides a floor for packet pacing when the application has allocated more media than
+    /// the latest bandwidth estimate. It does not change the estimate or the desired bitrate.
+    /// **Note:** This only has an effect if BWE has been enabled via
+    /// [`RtcConfig::enable_bwe`][crate::RtcConfig::enable_bwe].
+    pub fn set_current_bitrate(&mut self, current_bitrate: Bitrate) {
+        self.0.session.set_bwe_current_bitrate(current_bitrate);
+    }
+
     /// Configure the desired bitrate.
     ///
     /// Configure the bandwidth estimation system with the desired bitrate.
