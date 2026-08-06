@@ -41,6 +41,8 @@ use macros::log_loss;
 use smoother::EstimateSmoother;
 
 pub(crate) use macros::{log_pacer_media_debt, log_pacer_padding_debt};
+#[cfg(test)]
+pub(crate) use probe::ProbeKind;
 pub(crate) use probe::{BandwidthLimitedCause, ProbeEstimator};
 pub(crate) use probe::{ProbeClusterState, ProbeControl};
 
