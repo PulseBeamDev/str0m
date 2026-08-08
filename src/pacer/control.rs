@@ -27,6 +27,7 @@ impl PacerControl {
 
     pub fn calculate(
         &self,
+        current_bitrate: Option<Bitrate>,
         has_active_media: bool,
         estimate: Bitrate,
         is_overuse: bool,
@@ -46,7 +47,7 @@ impl PacerControl {
         // Set pacing rate to smooth out media transmission (burst avoidance).
         // Must be at least the current BWE estimate * factor, but also high enough
         // to allow the padding we want to send.
-        let min_pacing_rate = estimate * PACING_FACTOR;
+        let min_pacing_rate = current_bitrate.unwrap_or(estimate).max(estimate) * PACING_FACTOR;
         let pacing_rate = min_pacing_rate.max(padding_rate);
 
         PacingResult {
@@ -65,7 +66,7 @@ mod test {
         let c = PacerControl::new();
         let estimate = Bitrate::kbps(1_000);
 
-        let r = c.calculate(true, estimate, false);
+        let r = c.calculate(None, true, estimate, false);
 
         assert_eq!(r.padding_rate, PADDING_TARGET);
     }
@@ -75,7 +76,7 @@ mod test {
         let c = PacerControl::new();
         let estimate = Bitrate::kbps(1_000);
 
-        let r = c.calculate(false, estimate, false);
+        let r = c.calculate(None, false, estimate, false);
 
         assert_eq!(r.padding_rate, Bitrate::ZERO);
     }
@@ -85,7 +86,25 @@ mod test {
         let c = PacerControl::new();
         let estimate = Bitrate::mbps(40);
 
-        let r = c.calculate(true, estimate, true);
+        let r = c.calculate(None, true, estimate, true);
         assert_eq!(r.padding_rate, Bitrate::ZERO);
+    }
+
+    #[test]
+    fn allocation_above_estimate_acts_as_pacing_floor() {
+        let c = PacerControl::new();
+
+        let r = c.calculate(Some(Bitrate::kbps(2_000)), true, Bitrate::kbps(500), false);
+
+        assert_eq!(r.pacing_rate, Bitrate::kbps(2_000) * PACING_FACTOR);
+    }
+
+    #[test]
+    fn allocation_below_estimate_does_not_reduce_pacing() {
+        let c = PacerControl::new();
+
+        let r = c.calculate(Some(Bitrate::kbps(500)), true, Bitrate::kbps(2_000), false);
+
+        assert_eq!(r.pacing_rate, Bitrate::kbps(2_000) * PACING_FACTOR);
     }
 }
