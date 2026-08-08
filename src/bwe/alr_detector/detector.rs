@@ -89,6 +89,10 @@ impl AlrDetector {
         self.budget.use_budget(bytes);
         self.budget.increase_budget(delta);
 
+        self.update_state(now);
+    }
+
+    fn update_state(&mut self, now: Instant) {
         // Check for state transitions with hysteresis
         let ratio = self.budget.budget_ratio();
 
