@@ -59,6 +59,7 @@ impl DelayController {
         acked: &[AckedPacket],
         acked_bitrate: Option<Bitrate>,
         probe_bitrate: Option<Bitrate>,
+        offered_bitrate: Option<Bitrate>,
         now: Instant,
     ) -> Option<Bitrate> {
         let mut max_rtt = None;
@@ -97,6 +98,7 @@ impl DelayController {
             new_hypothesis,
             acked_bitrate,
             probe_bitrate,
+            offered_bitrate,
             self.get_smoothed_rtt(),
             now,
         );
@@ -128,6 +130,7 @@ impl DelayController {
         self.update_estimate(
             self.trendline_estimator.hypothesis(),
             acked_bitrate,
+            None,
             None,
             self.get_smoothed_rtt(),
             now,
@@ -183,6 +186,7 @@ impl DelayController {
         hypothesis: BandwidthUsage,
         observed_bitrate: Option<Bitrate>,
         probe_bitrate: Option<Bitrate>,
+        offered_bitrate: Option<Bitrate>,
         mean_max_rtt: Option<Duration>,
         now: Instant,
     ) {
@@ -201,8 +205,13 @@ impl DelayController {
             self.last_estimate = Some(estimated_rate);
         } else if let Some(observed_bitrate) = observed_bitrate {
             // No probe result, apply normal delay-based rate control
-            self.rate_control
-                .update(hypothesis.into(), observed_bitrate, mean_max_rtt, now);
+            self.rate_control.update(
+                hypothesis.into(),
+                observed_bitrate,
+                offered_bitrate,
+                mean_max_rtt,
+                now,
+            );
             let estimated_rate = self.rate_control.estimated_bitrate();
 
             log_bitrate_estimate!(estimated_rate.as_f64());
