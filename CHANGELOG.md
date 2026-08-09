@@ -1,5 +1,8 @@
 # Unreleased
 
+  * Replace public `Arc<[u8]>` payloads with `SharedBytes`; enable the
+    `single-threaded` feature to use non-atomic `Rc` storage (breaking)
+
 # 0.22.0
 
   * Make audio and video RTCP report intervals configurable #1021

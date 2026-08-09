@@ -1,9 +1,8 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use str0m::media::MediaKind;
 use str0m::rtp::Ssrc;
-use str0m::{Event, RtcError};
+use str0m::{Event, RtcError, SharedBytes};
 
 mod common;
 use common::{connect_l_r, init_crypto_default, init_log, progress};
@@ -173,7 +172,7 @@ pub fn app_specific_feedback_multiple_messages() -> Result<(), RtcError> {
     r.last = max;
 
     // Send 3 messages sequentially — at most one pending at a time.
-    let mut received_payloads: Vec<Arc<[u8]>> = Vec::new();
+    let mut received_payloads: Vec<SharedBytes> = Vec::new();
 
     for i in 0u8..3 {
         let payload = vec![i, i + 10, i + 20, i + 30];

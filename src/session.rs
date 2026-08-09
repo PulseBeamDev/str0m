@@ -1,9 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::ops::RangeInclusive;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::Event;
+use crate::SharedBytes;
 use crate::bwe::BweKind;
 use crate::bwe_::Bwe;
 use crate::config::KeyingMaterial;
@@ -349,7 +349,7 @@ impl Session {
         &mut self,
         sender_ssrc: Ssrc,
         media_ssrc: Ssrc,
-        payload: impl Into<Arc<[u8]>>,
+        payload: impl Into<SharedBytes>,
     ) {
         use crate::rtp_::AppSpecificFeedback as RtcpAppFeedback;
         let feedback = RtcpAppFeedback {
@@ -531,7 +531,7 @@ impl Session {
 
         // The decrypted plaintext borrows from the SRTP scratch buffer. We
         // narrow it down to the actual payload via slicing only, then build
-        // the final `Arc<[u8]>` in a single allocation at the end.
+        // the final `SharedBytes` in a single allocation at the end.
         let data = match srtp.unprotect_rtp(buf, &header, *seq_no) {
             Some(d) => d,
             None => {
@@ -619,9 +619,9 @@ impl Session {
 
         self.media_bytes_rx += data.len() as u64;
 
-        // One-shot conversion to Arc<[u8]>: a single allocation that copies
+        // One-shot conversion to SharedBytes: a single allocation that copies
         // only the trimmed payload bytes out of the SRTP scratch buffer.
-        let payload: Arc<[u8]> = Arc::from(data);
+        let payload: SharedBytes = data.into();
 
         let packet = stream.handle_rtp(now, header, payload, seq_no, receipt.time);
 

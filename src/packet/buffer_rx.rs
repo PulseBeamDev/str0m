@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::ops::{Range, RangeInclusive};
-use std::sync::Arc;
 use std::time::Instant;
 
+use crate::SharedBytes;
 use crate::rtp::vla::VideoLayersAllocation;
 use crate::rtp_::{ExtensionValues, MediaTime, RtpHeader, SenderInfo, SeqNo};
 
@@ -112,7 +112,7 @@ impl Depacketized {
 #[derive(Debug)]
 struct Entry {
     meta: RtpMeta,
-    data: Arc<[u8]>,
+    data: SharedBytes,
     head: bool,
     tail: bool,
 }
@@ -157,15 +157,15 @@ impl DepacketizingBuffer {
         }
     }
 
-    pub fn push(&mut self, meta: RtpMeta, data: impl Into<Arc<[u8]>>) {
+    pub fn push(&mut self, meta: RtpMeta, data: impl Into<SharedBytes>) {
         self.push_entry(meta, data.into(), None);
     }
 
     pub(crate) fn push_padding(&mut self, meta: RtpMeta) {
-        self.push_entry(meta, Arc::from([]), Some((false, false)));
+        self.push_entry(meta, SharedBytes::default(), Some((false, false)));
     }
 
-    fn push_entry(&mut self, meta: RtpMeta, data: Arc<[u8]>, partition: Option<(bool, bool)>) {
+    fn push_entry(&mut self, meta: RtpMeta, data: SharedBytes, partition: Option<(bool, bool)>) {
         // We're not emitting frames in the wrong order. If we receive
         // packets that are before the last emitted, we drop.
         //

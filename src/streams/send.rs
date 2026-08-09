@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+
+use crate::SharedBytes;
 
 use crate::config_mod::RtcpReportIntervals;
 use crate::format::CodecConfig;
@@ -196,7 +197,7 @@ pub struct RtpWrite {
     marker: bool,
     ext_vals: ExtensionValues,
     nackable: bool,
-    payload: Arc<[u8]>,
+    payload: SharedBytes,
     csrc_count: usize,
     csrc: [u32; 15],
     vp8_patch: Option<Vp8Patch>,
@@ -235,7 +236,7 @@ impl RtpWrite {
         seq_no: SeqNo,
         time: u32,
         wallclock: Instant,
-        payload: impl Into<Arc<[u8]>>,
+        payload: impl Into<SharedBytes>,
     ) -> Self {
         Self {
             pt,

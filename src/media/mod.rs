@@ -1,7 +1,6 @@
 //! Media (audio/video) related content.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::RtcError;
@@ -15,6 +14,7 @@ use crate::rtp_::SRTP_BLOCK_SIZE;
 use crate::rtp_::SRTP_OVERHEAD;
 use str0m_proto::Id;
 
+use crate::SharedBytes;
 use crate::format::PayloadParams;
 use crate::format::Vp9PacketizerMode;
 use crate::sdp::Simulcast as SdpSimulcast;
@@ -192,7 +192,7 @@ pub(crate) struct ToPayload {
     pub wallclock: Instant,
     pub rtp_time: MediaTime,
     pub start_of_talk_spurt: bool,
-    pub data: Arc<[u8]>,
+    pub data: SharedBytes,
     pub ext_vals: ExtensionValues,
 }
 

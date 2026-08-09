@@ -1,6 +1,5 @@
 use std::fmt;
 use std::ops::RangeInclusive;
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::packet::MediaKind;
@@ -9,6 +8,7 @@ use crate::sdp::SimulcastLayer as SdpSimulcastLayer;
 use crate::sdp::{RestrictionId, Simulcast as SdpSimulcast, SimulcastGroups as SdpSimulcastGroups};
 
 use super::PayloadParams;
+use crate::SharedBytes;
 use crate::format::CodecExtra;
 
 impl From<&SdpSimulcastLayer> for SimulcastLayer {
@@ -262,7 +262,7 @@ pub struct MediaData {
     /// transmission units into smaller parts.
     ///
     /// This data is a full depayloaded Frame.
-    pub data: Arc<[u8]>,
+    pub data: SharedBytes,
 
     /// RTP header extensions for this media data. This is taken from the
     /// first RTP header.
@@ -338,7 +338,7 @@ pub struct AppSpecificFeedback {
     /// SSRC of the media source this feedback relates to.
     pub media_ssrc: Ssrc,
     /// Application-dependent payload.
-    pub payload: Arc<[u8]>,
+    pub payload: SharedBytes,
 }
 
 /// Incoming feedback from a sender.

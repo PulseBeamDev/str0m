@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::SharedBytes;
 use crate::config_mod::RtcpReportIntervals;
 use crate::media::KeyframeRequestKind;
 use crate::rtp_::MidRid;
@@ -455,7 +455,7 @@ impl StreamRx {
         &mut self,
         now: Instant,
         header: RtpHeader,
-        payload: Arc<[u8]>,
+        payload: SharedBytes,
         seq_no: SeqNo,
         time: MediaTime,
     ) -> RtpPacket {

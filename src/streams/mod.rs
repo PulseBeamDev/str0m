@@ -1,9 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self};
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::SharedBytes;
 use crate::config_mod::RtcpReportIntervals;
 use crate::format::CodecConfig;
 use crate::format::PayloadParams;
@@ -54,7 +54,7 @@ pub struct RtpPacket {
     pub header: RtpHeader,
 
     /// RTP payload. This contains no header.
-    pub payload: Arc<[u8]>,
+    pub payload: SharedBytes,
 
     vp8_patch: Option<Vp8Patch>,
 
@@ -107,7 +107,7 @@ impl RtpPacket {
                 payload_type: BLANK_PACKET_DEFAULT_PT,
                 ..Default::default()
             },
-            payload: Arc::default(), // This payload is never used. See RtpHeader::create_padding_packet
+            payload: SharedBytes::default(), // This payload is never used. See RtpHeader::create_padding_packet
             vp8_patch: None,
             nackable: false,
             last_sender_info: None,

@@ -96,6 +96,12 @@ systemstat = "0.2.2"
 pcap-file = "2.0.0"
 regex = "1.11.1"
 rand = "0.9.0"
+criterion = { version = "0.5", features = ["html_reports"] }
+mimalloc = "0.1.52"
+
+[[bench]]
+name = "shared_bytes"
+harness = false
 
 [features]
 default = ["aws-lc-rs", "examples"]
@@ -115,6 +121,10 @@ pii = ["str0m-proto/pii", "is/pii"]
 # The examples require TLS for the web server via rouille.
 # We use rustls instead of ssl to avoid OpenSSL dependency issues on Windows.
 examples = ["rouille/rustls"]
+
+# Use non-atomic reference counting for shared byte payloads. This makes
+# SharedBytes and types containing it !Send and !Sync.
+single-threaded = []
 
 _internal_dont_use_log_stats = []
 _internal_test_exports = ["str0m-proto/_internal_test_exports", "is/_internal_test_exports"]
@@ -168,6 +178,8 @@ systemstat.workspace = true
 pcap-file.workspace = true
 regex.workspace = true
 rand.workspace = true
+criterion.workspace = true
+mimalloc.workspace = true
 
 # Package rename not supported with workspace inheritance
 netem = { package = "str0m-netem", version = "0.4.0", path = "crates/netem" }

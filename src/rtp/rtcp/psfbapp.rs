@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use crate::SharedBytes;
 use crate::rtp::Ssrc;
 
 use super::RtcpType;
@@ -17,7 +16,7 @@ pub struct AppSpecificFeedback {
     /// SSRC of the media source this feedback relates to.
     pub media_ssrc: Ssrc,
     /// Application-dependent payload (after sender_ssrc and media_ssrc).
-    pub payload: Arc<[u8]>,
+    pub payload: SharedBytes,
 }
 
 impl RtcpPacket for AppSpecificFeedback {

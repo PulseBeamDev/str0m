@@ -1,9 +1,8 @@
-use std::sync::Arc;
-
 use crate::Candidate;
 use crate::IceCreds;
 use crate::Rtc;
 use crate::RtcError;
+use crate::SharedBytes;
 use crate::channel::ChannelId;
 use crate::crypto::Fingerprint;
 use crate::crypto::dtls::ProtocolVersion;
@@ -402,7 +401,7 @@ impl<'a> DirectApi<'a> {
         &mut self,
         sender_ssrc: Ssrc,
         media_ssrc: Ssrc,
-        payload: impl Into<Arc<[u8]>>,
+        payload: impl Into<SharedBytes>,
     ) {
         self.rtc
             .session

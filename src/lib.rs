@@ -487,13 +487,15 @@
 //! write access. Since str0m has no internal threads, we never have to
 //! deal with shared data. Furthermore the the internals of the library is
 //! organized such that we don't need multiple references to the same
-//! entities. In str0m there are no `Rc`, `Mutex`, `mpsc`, `Arc`(*),  or
-//! other locks.
+//! entities. In str0m there are no `Mutex`, `mpsc`, or other locks. Shared
+//! media payloads use [`SharedBytes`], which uses `Arc` by default and `Rc`
+//! when the `single-threaded` feature is enabled.
 //!
 //! This means all input to the lib can be modelled as
 //! `handle_something(&mut self, something)`.
 //!
-//! (*) Ok. There is one `Arc` if you use Windows where we also require openssl.
+//! The `single-threaded` feature makes payload-containing public types such as
+//! [`rtp::RtpPacket`] and [`media::MediaData`] neither `Send` nor `Sync`.
 //!
 //! ## Not a standard WebRTC "Peer Connection" API
 //!
@@ -758,6 +760,9 @@ pub mod ice {
 
 mod io;
 use io::DatagramRecvInner;
+
+mod shared_bytes;
+pub use shared_bytes::SharedBytes;
 
 mod packet;
 
@@ -2220,6 +2225,7 @@ mod test {
 
     use super::*;
 
+    #[cfg(not(feature = "single-threaded"))]
     #[test]
     fn rtc_is_send() {
         fn is_send<T: Send>(_t: T) {}
