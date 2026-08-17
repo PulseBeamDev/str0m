@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use super::Pacer;
 use super::PaddingRequest;
+use super::QueuePriority;
 use super::QueueState;
 use crate::Reason;
 use crate::bwe_::ProbeClusterConfig;
@@ -196,6 +197,7 @@ impl LeakyBucketPacer {
     pub(crate) fn start_probe(&mut self, config: ProbeClusterConfig) {
         trace!(?config, "Probe start");
         self.probe_queue.push_back(ProbeClusterState::new(config));
+        self.request_immediate_timeout();
     }
 
     /// Get the cluster ID of the active probe, if any.
@@ -325,7 +327,7 @@ impl LeakyBucketPacer {
 
         // If we're actively probing, use probe timing for padding
         if let Some(probe) = self.probe_queue.front() {
-            let next_probe_time = probe.next_probe_time();
+            let next_probe_time = probe.next_padding_time();
             // We explicitly don't return a queue to poll here. We need another call to
             // handle_timeout to request the padding before we can poll the selected queue.
             return Some(((next_probe_time, PacerReason::Probe2), None));
@@ -398,15 +400,6 @@ impl LeakyBucketPacer {
     /// Returns `Some(PaddingRequest)` if padding is enabled and the current queue state
     /// allows padding, otherwise returns `None`.
     fn maybe_create_padding_request(&mut self, now: Instant) -> Option<PaddingRequest> {
-        // Queues must be empty.
-        let all_queues_empty = self
-            .queue_states
-            .iter()
-            .all(|q| q.snapshot.packet_count == 0);
-        if !all_queues_empty {
-            return None;
-        }
-
         // We must have a queue that supports padding.
         let maybe_queue = self
             .queue_states
@@ -441,10 +434,30 @@ impl LeakyBucketPacer {
                 return None;
             };
 
+            let queued_media = self
+                .queue_states
+                .iter()
+                .filter(|q| !q.unpaced && q.snapshot.priority == QueuePriority::Media)
+                .fold(DataSize::ZERO, |size, q| {
+                    size + DataSize::from(q.snapshot.byte_size)
+                });
+            let padding_size = padding_size.saturating_sub(queued_media);
+            if padding_size == DataSize::ZERO {
+                return None;
+            }
+
             return Some(PaddingRequest {
                 midrid: queue.midrid,
                 padding: padding_size.as_bytes_usize(),
             });
+        }
+
+        let all_queues_empty = self
+            .queue_states
+            .iter()
+            .all(|q| q.snapshot.packet_count == 0);
+        if !all_queues_empty {
+            return None;
         }
 
         // Normal padding: requires zero debt
@@ -485,6 +498,7 @@ impl LeakyBucketPacer {
 mod test {
     use super::super::{QueuePriority, QueueSnapshot};
     use super::*;
+    use crate::bwe_::ProbeKind;
     use crate::rtp_::{DataSize, Mid, RtpHeader};
     use queue::{PacketKind, Queue, QueuedPacket};
     use std::time::{Duration, Instant};
@@ -639,6 +653,114 @@ mod test {
         );
 
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn starting_probe_wakes_pacer() {
+        let now = Instant::now();
+        let midrid = MidRid(Mid::from("0"), None);
+        let queue_state = QueueState {
+            midrid,
+            unpaced: false,
+            use_for_padding: true,
+            snapshot: QueueSnapshot {
+                created_at: now,
+                ..Default::default()
+            },
+        };
+        let mut pacer = LeakyBucketPacer::new(Bitrate::mbps(1));
+        assert_eq!(pacer.padding_bitrate, Bitrate::ZERO);
+        assert!(
+            pacer
+                .handle_timeout(now, std::iter::once(queue_state))
+                .is_none()
+        );
+
+        let config = ProbeClusterConfig::new(1.into(), Bitrate::mbps(2), ProbeKind::Initial);
+        pacer.start_probe(config);
+
+        let wake_at = pacer.poll_timeout().0.expect("probe must wake the pacer");
+        assert!(wake_at > now);
+        assert_eq!(wake_at, now + Duration::from_micros(1));
+    }
+
+    #[test]
+    fn active_probe_prefers_enough_queued_media() {
+        let now = Instant::now();
+        let media_midrid = MidRid(Mid::from("media"), None);
+        let padding_midrid = MidRid(Mid::from("padding"), None);
+        let media_state = QueueState {
+            midrid: media_midrid,
+            unpaced: false,
+            use_for_padding: false,
+            snapshot: QueueSnapshot {
+                created_at: now,
+                byte_size: 1200,
+                packet_count: 1,
+                first_unsent: Some(now),
+                priority: QueuePriority::Media,
+                ..Default::default()
+            },
+        };
+        let padding_state = QueueState {
+            midrid: padding_midrid,
+            unpaced: false,
+            use_for_padding: true,
+            snapshot: QueueSnapshot {
+                created_at: now,
+                last_emitted: Some(now),
+                ..Default::default()
+            },
+        };
+        let mut pacer = LeakyBucketPacer::new(Bitrate::mbps(1));
+        let config = ProbeClusterConfig::new(1.into(), Bitrate::mbps(3), ProbeKind::LargeDrop);
+        pacer.start_probe(config);
+
+        let request = pacer.handle_timeout(now, [media_state, padding_state].into_iter());
+
+        assert!(request.is_none());
+        assert_eq!(pacer.poll_queue(), Some((media_midrid, Some(1.into()))));
+    }
+
+    #[test]
+    fn active_probe_pads_a_queued_media_shortfall() {
+        let now = Instant::now();
+        let media_midrid = MidRid(Mid::from("media"), None);
+        let padding_midrid = MidRid(Mid::from("padding"), None);
+        let media_state = QueueState {
+            midrid: media_midrid,
+            unpaced: false,
+            use_for_padding: false,
+            snapshot: QueueSnapshot {
+                created_at: now,
+                byte_size: 100,
+                packet_count: 1,
+                first_unsent: Some(now),
+                priority: QueuePriority::Media,
+                ..Default::default()
+            },
+        };
+        let padding_state = QueueState {
+            midrid: padding_midrid,
+            unpaced: false,
+            use_for_padding: true,
+            snapshot: QueueSnapshot {
+                created_at: now,
+                last_emitted: Some(now),
+                ..Default::default()
+            },
+        };
+        let mut pacer = LeakyBucketPacer::new(Bitrate::mbps(1));
+        let config = ProbeClusterConfig::new(1.into(), Bitrate::mbps(3), ProbeKind::LargeDrop);
+        pacer.start_probe(config);
+
+        let request = pacer
+            .handle_timeout(now, [media_state, padding_state].into_iter())
+            .expect("a probe must pad a queued media shortfall");
+
+        assert_eq!(request.midrid, padding_midrid);
+        assert!(request.padding > 0);
+        assert!(request.padding < 1200);
     }
 
     #[test]

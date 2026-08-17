@@ -188,10 +188,12 @@ impl ProbeClusterState {
         // Packet-level pacing: schedule based on bytes sent at the target bitrate.
         // next_time = start_time + (bytes_sent / target_bitrate)
         let send_duration = self.bytes_sent / self.config.target_bitrate;
-        let probe_time = started_at + send_duration;
+        started_at + send_duration
+    }
 
-        let min_burst_time = self.last_padding_at + self.config.min_probe_delta();
-        probe_time.max(min_burst_time)
+    pub fn next_padding_time(&self) -> Instant {
+        self.next_probe_time()
+            .max(self.last_padding_at + self.config.min_probe_delta())
     }
 
     /// Check if the probe cluster is complete.
@@ -221,9 +223,7 @@ impl ProbeClusterState {
     ///
     /// Returns `true` if `now >= next_probe_time()`, meaning we should send a packet now.
     pub fn should_send_now(&self, now: Instant) -> bool {
-        let next_time = self.next_probe_time();
-        let min_burst_time = self.last_padding_at + self.config.min_probe_delta();
-        now >= next_time && now >= min_burst_time
+        now >= self.next_padding_time()
     }
 
     /// Calculate how much padding should be generated for the next probe packet.
@@ -411,7 +411,7 @@ mod test {
     }
 
     #[test]
-    fn min_probe_delta_is_enforced_in_next_probe_time() {
+    fn min_probe_delta_is_enforced_between_padding_requests() {
         let now = Instant::now();
         let config = ProbeClusterConfig::new(1.into(), Bitrate::mbps(3), ProbeKind::Initial)
             .with_min_probe_delta(Duration::from_millis(20));
@@ -422,10 +422,24 @@ mod test {
         assert!(state.next_packet(now).is_some());
         assert!(state.next_packet(now + Duration::from_millis(19)).is_none());
         assert!(state.next_packet(now + Duration::from_millis(20)).is_some());
-        let next = state.last_padding_at;
+        let next = state.next_padding_time();
         assert!(
             next >= now + Duration::from_millis(20),
-            "next_probe_time {next:?} must be >= now + min_probe_delta"
+            "next padding time {next:?} must be >= now + min_probe_delta"
         );
+    }
+
+    #[test]
+    fn packets_inside_a_padding_burst_use_bitrate_pacing() {
+        let now = Instant::now();
+        let config = ProbeClusterConfig::new(1.into(), Bitrate::mbps(3), ProbeKind::Initial)
+            .with_min_probe_delta(Duration::from_millis(20));
+        let mut state = ProbeClusterState::new(config);
+
+        assert!(state.next_packet(now).is_some());
+        state.record_packet(now, DataSize::bytes(240));
+
+        assert_eq!(state.next_probe_time(), now + Duration::from_micros(640));
+        assert!(state.next_probe_time() < now + state.config().min_probe_delta());
     }
 }
