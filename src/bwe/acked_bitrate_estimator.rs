@@ -6,6 +6,7 @@ use crate::rtp_::DataSize;
 const SMALL_SAMPLE_THRESHOLD: DataSize = DataSize::bytes(2000);
 const SMALL_SAMPLE_UNCERTAINTY: f64 = 25.0;
 const UNCERTAINTY: f64 = 10.0;
+const ALR_UNCERTAINTY: f64 = 10.0;
 const ESTIMATE_FLOOR: Bitrate = Bitrate::kbps(40);
 
 pub struct AckedBitrateEstimator {
@@ -23,6 +24,8 @@ pub struct AckedBitrateEstimator {
     current_window: Duration,
     /// The last time the window was updated.
     last_update: Option<Instant>,
+    in_alr: bool,
+    alr_ended_time: Option<Instant>,
 }
 
 impl AckedBitrateEstimator {
@@ -35,10 +38,26 @@ impl AckedBitrateEstimator {
             sum: DataSize::ZERO,
             current_window: Duration::ZERO,
             last_update: None,
+            in_alr: false,
+            alr_ended_time: None,
         }
     }
 
-    pub(super) fn update(&mut self, receive_time: Instant, packet_size: DataSize) {
+    #[cfg(test)]
+    fn update(&mut self, receive_time: Instant, packet_size: DataSize) {
+        self.update_packet(receive_time, receive_time, packet_size);
+    }
+
+    pub(super) fn update_packet(
+        &mut self,
+        send_time: Instant,
+        receive_time: Instant,
+        packet_size: DataSize,
+    ) {
+        if self.alr_ended_time.is_some_and(|ended| send_time > ended) {
+            self.estimate_var += 200.0;
+            self.alr_ended_time = None;
+        }
         let window = if self.estimate.is_none() {
             // Use the initial, larger, window at first
             self.initial_window
@@ -60,6 +79,8 @@ impl AckedBitrateEstimator {
 
         let scale = if is_small_sample && sample_estimate < estimate {
             SMALL_SAMPLE_UNCERTAINTY
+        } else if self.in_alr && sample_estimate < estimate {
+            ALR_UNCERTAINTY
         } else {
             UNCERTAINTY
         };
@@ -90,6 +111,14 @@ impl AckedBitrateEstimator {
 
     pub(super) fn current_estimate(&self) -> Option<Bitrate> {
         self.estimate
+    }
+
+    pub(super) fn set_alr(&mut self, in_alr: bool) {
+        self.in_alr = in_alr;
+    }
+
+    pub(super) fn set_alr_ended_time(&mut self, at: Instant) {
+        self.alr_ended_time = Some(at);
     }
 
     fn update_window(
@@ -249,5 +278,29 @@ mod test {
             estimate_after.as_u64(),
             "Estimate should change after accumulating >= 150ms due to correct modulo overflow"
         );
+    }
+
+    #[test]
+    fn first_packet_sent_after_alr_allows_fast_change() {
+        let now = Instant::now();
+        let mut estimator =
+            AckedBitrateEstimator::new(Duration::from_millis(500), Duration::from_millis(150));
+        estimator.set_alr(true);
+        estimator.set_alr_ended_time(now + Duration::from_millis(10));
+
+        estimator.update_packet(
+            now + Duration::from_millis(9),
+            now + Duration::from_millis(20),
+            DataSize::bytes(1_000),
+        );
+        assert_eq!(estimator.estimate_var, 50.0);
+        estimator.update_packet(
+            now + Duration::from_millis(11),
+            now + Duration::from_millis(21),
+            DataSize::bytes(1_000),
+        );
+
+        assert_eq!(estimator.estimate_var, 250.0);
+        assert!(estimator.alr_ended_time.is_none());
     }
 }

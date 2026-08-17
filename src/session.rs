@@ -1204,6 +1204,7 @@ impl Session {
     }
 
     fn configure_pacer(&mut self) {
+        let has_active_media = self.has_active_outgoing_media();
         let Some(bwe) = self.bwe.as_mut() else {
             return;
         };
@@ -1212,14 +1213,13 @@ impl Session {
             // No estimate yet, no padding
             return;
         };
+        let app_rate = bwe.app_rate();
         let is_overuse = bwe.is_overusing();
 
-        let has_active_media = self.has_active_outgoing_media();
-
         // Calculate pacing and padding rates
-        let result = self
-            .pacer_control
-            .calculate(has_active_media, current_estimate, is_overuse);
+        let result =
+            self.pacer_control
+                .calculate(app_rate, has_active_media, current_estimate, is_overuse);
 
         self.pacer.set_padding_rate(result.padding_rate);
         self.pacer.set_pacing_rate(result.pacing_rate);

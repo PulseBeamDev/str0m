@@ -24,6 +24,7 @@ use crate::util::Soonest;
 mod acked_bitrate_estimator;
 mod alr_detector;
 pub(crate) mod api;
+mod app_rate;
 mod delay;
 mod link_capacity_estimator;
 mod loss_controller;
@@ -34,6 +35,7 @@ mod time;
 
 use acked_bitrate_estimator::AckedBitrateEstimator;
 use alr_detector::AlrDetector;
+use app_rate::AppRateEwma;
 use delay::DelayController;
 use link_capacity_estimator::LinkCapacityEstimator;
 use loss_controller::{LossController, LossControllerState};
@@ -41,6 +43,8 @@ use macros::log_loss;
 use smoother::EstimateSmoother;
 
 pub(crate) use macros::{log_pacer_media_debt, log_pacer_padding_debt};
+#[cfg(test)]
+pub(crate) use probe::ProbeKind;
 pub(crate) use probe::{BandwidthLimitedCause, ProbeEstimator};
 pub(crate) use probe::{ProbeClusterState, ProbeControl};
 
@@ -55,6 +59,7 @@ const STARTUP_PHASE: Duration = Duration::from_secs(2);
 
 pub struct Bwe {
     bwe: SendSideBandwidthEstimator,
+    app_rate: AppRateEwma,
     desired_bitrate: Bitrate,
     smoother: EstimateSmoother,
 }
@@ -64,6 +69,7 @@ impl Bwe {
         let send_side_bwe = SendSideBandwidthEstimator::new(initial);
         Bwe {
             bwe: send_side_bwe,
+            app_rate: AppRateEwma::new(Duration::from_millis(500)),
             desired_bitrate: Bitrate::ZERO,
             smoother: EstimateSmoother::new(),
         }
@@ -111,7 +117,10 @@ impl Bwe {
 
     pub fn on_media_sent(&mut self, payload_size: DataSize, is_padding: bool, now: Instant) {
         if !is_padding {
-            // Update ALR detector with media bytes sent
+            self.app_rate.record_bytes(
+                now,
+                u64::try_from(payload_size.as_bytes_usize()).unwrap_or(u64::MAX),
+            );
             self.bwe.on_media_sent(payload_size, now);
         }
     }
@@ -122,6 +131,10 @@ impl Bwe {
 
     pub fn set_desired_bitrate(&mut self, v: Bitrate) {
         self.desired_bitrate = v;
+    }
+
+    pub fn app_rate(&self) -> Bitrate {
+        self.app_rate.bitrate()
     }
 }
 
@@ -135,6 +148,7 @@ struct SendSideBandwidthEstimator {
     alr_detector: AlrDetector,
     link_capacity_estimator: LinkCapacityEstimator,
     last_updated_estimate: Option<Bitrate>,
+    alr_start_time: Option<Instant>,
 }
 
 impl SendSideBandwidthEstimator {
@@ -158,6 +172,7 @@ impl SendSideBandwidthEstimator {
             alr_detector,
             link_capacity_estimator: LinkCapacityEstimator::new(),
             last_updated_estimate: None,
+            alr_start_time: None,
         }
     }
 
@@ -180,6 +195,7 @@ impl SendSideBandwidthEstimator {
     /// Record a packet from a TWCC report.
     pub fn update<'t>(&mut self, records: impl Iterator<Item = &'t TwccSendRecord>, now: Instant) {
         let _ = self.started_at.get_or_insert(now);
+        self.sync_alr(now);
 
         let send_records: Vec<_> = records.collect();
 
@@ -214,14 +230,18 @@ impl SendSideBandwidthEstimator {
         acked_packets.sort_by(AckedPacket::order_by_receive_time);
 
         for acked_packet in acked_packets.iter() {
-            self.acked_bitrate_estimator
-                .update(acked_packet.remote_recv_time, acked_packet.size);
+            self.acked_bitrate_estimator.update_packet(
+                acked_packet.local_send_time,
+                acked_packet.remote_recv_time,
+                acked_packet.size,
+            );
         }
 
         let acked_bitrate = self.acked_bitrate_estimator.current_estimate();
 
-        // Use the latest probe result from this update, if any
-        let probe_result = latest_probe_result;
+        let probe_result = latest_probe_result.map(|bitrate| {
+            limit_probe_bitrate(bitrate, acked_bitrate, self.delay_controller.last_estimate())
+        });
 
         let is_probe_result = probe_result.is_some();
 
@@ -290,6 +310,7 @@ impl SendSideBandwidthEstimator {
         do_probe: bool,
         now: Instant,
     ) -> Option<ProbeClusterConfig> {
+        self.sync_alr(now);
         self.delay_controller
             .handle_timeout(self.acked_bitrate_estimator.current_estimate(), now);
 
@@ -326,6 +347,15 @@ impl SendSideBandwidthEstimator {
 
         // Timer-driven probe logic (WebRTC `Process()` equivalent).
         self.probe_control.handle_timeout(now)
+    }
+
+    fn sync_alr(&mut self, now: Instant) {
+        let current = self.alr_detector.alr_start_time();
+        if self.alr_start_time.is_some() && current.is_none() {
+            self.acked_bitrate_estimator.set_alr_ended_time(now);
+        }
+        self.acked_bitrate_estimator.set_alr(current.is_some());
+        self.alr_start_time = current;
     }
 
     fn propagate_estimate(&mut self) {
@@ -445,6 +475,136 @@ fn in_startup_phase(started_at: Option<Instant>, now: Instant) -> bool {
     started_at
         .map(|s| now.duration_since(s) <= STARTUP_PHASE)
         .unwrap_or(false)
+}
+
+/// Fraction of acknowledged throughput a probe result may not fall below.
+///
+/// libWebRTC's `kProbeDropThroughputFraction` in `goog_cc_network_control.cc`.
+const PROBE_DROP_THROUGHPUT_FRACTION: f64 = 0.85;
+
+/// Stop a low probe result from discarding throughput TWCC already proves the path carries.
+///
+/// `GoogCcNetworkController::OnTransportPacketsFeedback`, the
+/// `WebRTC-Bwe-LimitProbesLowerThanThroughputEstimate` arm:
+///
+/// ```text
+/// DataRate limit = std::min(delay_based_bwe_->last_estimate(),
+///                           *acknowledged_bitrate * kProbeDropThroughputFraction);
+/// probe_bitrate = std::max(*probe_bitrate, limit);
+/// ```
+///
+/// Unconditional, as upstream is: whether a probe may be applied at all is decided by the
+/// overuse hypothesis inside the delay controller, which is where `MaybeUpdateEstimate` decides
+/// it. This only bounds how far down a probe that *is* applied may pull the estimate.
+///
+/// The field trial is gated on `!IsDisabled(..)`, so it is **on** by default upstream and
+/// carrying it is alignment rather than a configuration choice. Without the bound a probe
+/// cluster — a handful of padding packets over a few milliseconds, on a path where jitter
+/// dominates the rate derived from them — can halve an estimate the path has sustained for
+/// seconds.
+fn limit_probe_bitrate(
+    probe_bitrate: Bitrate,
+    acknowledged_bitrate: Option<Bitrate>,
+    delay_estimate: Option<Bitrate>,
+) -> Bitrate {
+    let (Some(delay_estimate), Some(acknowledged_bitrate)) = (delay_estimate, acknowledged_bitrate)
+    else {
+        return probe_bitrate;
+    };
+
+    let limit = delay_estimate.min(acknowledged_bitrate * PROBE_DROP_THROUGHPUT_FRACTION);
+    probe_bitrate.max(limit)
+}
+
+#[cfg(test)]
+mod probe_limit_test {
+    use super::*;
+
+    #[test]
+    fn low_probe_is_floored_below_acknowledged_throughput() {
+        let result = limit_probe_bitrate(
+            Bitrate::kbps(400),
+            Some(Bitrate::kbps(1_000)),
+            Some(Bitrate::kbps(900)),
+        );
+
+        assert_eq!(result, Bitrate::kbps(850));
+    }
+
+    #[test]
+    fn floor_is_capped_by_delay_estimate() {
+        let result = limit_probe_bitrate(
+            Bitrate::kbps(400),
+            Some(Bitrate::kbps(1_000)),
+            Some(Bitrate::kbps(700)),
+        );
+
+        assert_eq!(result, Bitrate::kbps(700));
+    }
+
+    #[test]
+    fn limit_never_lowers_or_increases_probe_result() {
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::kbps(900),
+                Some(Bitrate::kbps(1_000)),
+                Some(Bitrate::kbps(800)),
+            ),
+            Bitrate::kbps(900)
+        );
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::kbps(500),
+                Some(Bitrate::kbps(1_000)),
+                Some(Bitrate::kbps(400)),
+            ),
+            Bitrate::kbps(500)
+        );
+    }
+
+    /// The bound is `min(delay_estimate, acked * 0.85)`, and nothing else.
+    ///
+    /// The estimate is the ceiling on the bound, so a probe below a *low* acknowledged rate is
+    /// only lifted as far as that rate justifies — never to the estimate, which is what a
+    /// separate "may raise but not lower" rule would do. That rule is not upstream, and gating
+    /// whether a probe applies at all belongs to the overuse hypothesis in the delay
+    /// controller, where `MaybeUpdateEstimate` puts it.
+    #[test]
+    fn the_bound_is_acknowledged_throughput_capped_by_the_estimate() {
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::kbps(500),
+                Some(Bitrate::kbps(250)),
+                Some(Bitrate::kbps(1_500)),
+            ),
+            Bitrate::kbps(500),
+            "acked * 0.85 is 212kbps, below the probe, so the probe stands"
+        );
+
+        // A probe above the current estimate still raises it.
+        assert_eq!(
+            limit_probe_bitrate(
+                Bitrate::kbps(2_000),
+                Some(Bitrate::kbps(250)),
+                Some(Bitrate::kbps(1_500)),
+            ),
+            Bitrate::kbps(2_000)
+        );
+    }
+
+    #[test]
+    fn missing_estimates_leave_probe_unchanged() {
+        let probe = Bitrate::kbps(400);
+
+        assert_eq!(
+            limit_probe_bitrate(probe, None, Some(Bitrate::kbps(900))),
+            probe
+        );
+        assert_eq!(
+            limit_probe_bitrate(probe, Some(Bitrate::kbps(1_000)), None),
+            probe
+        );
+    }
 }
 
 impl TryFrom<&TwccSendRecord> for AckedPacket {
