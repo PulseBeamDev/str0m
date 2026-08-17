@@ -855,7 +855,7 @@ pub mod error;
 
 /// Network related types to get socket data in/out of [`Rtc`].
 pub mod net {
-    pub use crate::io::{DatagramRecv, DatagramSend, Protocol, Receive, TcpType, Transmit};
+    pub use crate::io::{DatagramRecv, DatagramSend, Protocol, Receive, SendId, TcpType, Transmit};
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -1078,6 +1078,13 @@ pub enum Input<'a> {
     /// not necessarily "now" (e.g. when UDP demultiplexing runs on a separate thread). It
     /// drives time forward when more recent than the last "now" the instance has seen.
     Receive(Instant, net::Receive<'a>),
+    /// The wire departure time of a previously emitted transmission.
+    SendTimestamp {
+        /// Identifier from [`net::Transmit::send_id`].
+        id: net::SendId,
+        /// Time the transmission departed the socket.
+        at: Instant,
+    },
 }
 
 /// Output produced by [`Rtc::poll_output()`]
@@ -1813,6 +1820,7 @@ impl Rtc {
                     source: send.source,
                     destination: send.destination,
                     contents,
+                    send_id: self.session.take_send_id(),
                 };
                 return Ok(Output::Transmit(t));
             }
@@ -1967,6 +1975,7 @@ impl Rtc {
                 self.do_handle_receive(recv_time, r)?;
                 self.do_handle_timeout(recv_time)?;
             }
+            Input::SendTimestamp { id, at } => self.session.report_send_time(id, at),
         }
         Ok(())
     }

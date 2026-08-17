@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use super::{FeedbackMessageType, RtcpHeader, RtcpPacket, extend_u16};
 use super::{RtcpType, Ssrc, TransportType};
 
+use crate::net::SendId;
 use crate::rtp_::{TwccClusterId, TwccSeq};
 
 /// Transport Wide Congestion Control.
@@ -1073,6 +1074,10 @@ pub struct TwccSendRecord {
     /// The (local) time we sent the packet represented by seq.
     local_send_time: Instant,
 
+    send_id: Option<SendId>,
+
+    send_time_reported: bool,
+
     /// Size in bytes of the payload sent.
     size: u16,
 
@@ -1132,6 +1137,8 @@ impl TwccSendRecord {
         Self {
             packet_id,
             local_send_time,
+            send_id: None,
+            send_time_reported: true,
             size: size as u16,
             recv_report: Some(TwccRecvReport {
                 local_recv_time,
@@ -1166,10 +1173,34 @@ impl TwccSendRegister {
     }
 
     pub fn register_seq(&mut self, packet_id: TwccPacketId, now: Instant, size: usize) {
+        self.register(packet_id, None, now, size, true);
+    }
+
+    pub fn register_seq_pending(
+        &mut self,
+        packet_id: TwccPacketId,
+        send_id: SendId,
+        provisional_time: Instant,
+        size: usize,
+    ) {
+        self.register(packet_id, Some(send_id), provisional_time, size, false);
+    }
+
+    fn register(
+        &mut self,
+        packet_id: TwccPacketId,
+        send_id: Option<SendId>,
+        local_send_time: Instant,
+        size: usize,
+        send_time_reported: bool,
+    ) {
+        debug_assert!(size <= u16::MAX as usize);
         self.last_registered = packet_id.seq();
         self.queue.push_back(TwccSendRecord {
             packet_id,
-            local_send_time: now,
+            local_send_time,
+            send_id,
+            send_time_reported,
             // In practice the max sizes is constrained by the MTU and will max out around 1200
             // bytes, hence this cast is fine.
             size: size as u16,
@@ -1179,6 +1210,23 @@ impl TwccSendRegister {
         while self.queue.len() > self.keep {
             self.queue.pop_front();
         }
+    }
+
+    pub fn update_send_time(&mut self, send_id: SendId, at: Instant) -> bool {
+        let Some(record) = self
+            .queue
+            .iter_mut()
+            .find(|record| record.send_id == Some(send_id))
+        else {
+            return false;
+        };
+        debug_assert!(!record.send_time_reported, "send timestamp reported twice");
+        if record.send_time_reported {
+            return false;
+        }
+        record.local_send_time = at;
+        record.send_time_reported = true;
+        true
     }
 
     /// Apply a TWCC RTCP report.
@@ -1301,9 +1349,10 @@ impl TwccSendRegister {
             // apply_report_counter(). This is to not double count in the BWE,
             // which is the consumer of this returned iterator.
             .filter(move |s| {
-                s.recv_report
-                    .map(|r| r.apply_report_counter == apply_report_counter)
-                    .unwrap_or_default()
+                s.send_time_reported
+                    && s.recv_report
+                        .map(|r| r.apply_report_counter == apply_report_counter)
+                        .unwrap_or_default()
             }),
         )
     }
@@ -2155,6 +2204,31 @@ mod test {
             pct, 25,
             "The loss percentage should be 25 as 2 out of 8 packets are lost"
         );
+    }
+
+    #[test]
+    fn pending_send_times_do_not_enter_feedback() {
+        let now = Instant::now();
+        let sent_at = now + Duration::from_millis(7);
+        let mut send = TwccSendRegister::new(10);
+        send.register_seq_pending(TwccPacketId::new(1), SendId(11), now, 1200);
+        send.register_seq_pending(TwccPacketId::new(2), SendId(12), now, 1200);
+        assert!(send.update_send_time(SendId(12), sent_at));
+
+        let mut receive = TwccRecvRegister::new(10);
+        receive.update_seq(1.into(), now + Duration::from_millis(20));
+        receive.update_seq(2.into(), now + Duration::from_millis(21));
+        let report = receive
+            .build_report(10_000)
+            .expect("feedback for both packets");
+        let records: Vec<_> = send
+            .apply_report(report, now + Duration::from_millis(30))
+            .expect("registered feedback")
+            .collect();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].seq(), TwccSeq::from(2));
+        assert_eq!(records[0].local_send_time(), sent_at);
     }
 
     #[test]

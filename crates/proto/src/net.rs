@@ -115,6 +115,10 @@ impl fmt::Display for Protocol {
     }
 }
 
+/// Identifies a transmission whose wire departure time can be reported later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SendId(pub u64);
+
 /// An instruction to send an outgoing packet.
 #[derive(Serialize, Deserialize)]
 pub struct Transmit {
@@ -133,6 +137,9 @@ pub struct Transmit {
 
     /// Contents of the datagram.
     pub contents: DatagramSend,
+
+    /// Identifier used to report the packet's wire departure time.
+    pub send_id: Option<SendId>,
 }
 
 impl fmt::Debug for Transmit {
@@ -142,6 +149,7 @@ impl fmt::Debug for Transmit {
             .field("source", &self.source)
             .field("destination", &self.destination)
             .field("len", &self.contents.len())
+            .field("send_id", &self.send_id)
             .finish()
     }
 }

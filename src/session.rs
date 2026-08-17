@@ -88,6 +88,8 @@ pub(crate) struct Session {
     last_nack: Instant,
     last_twcc: Instant,
     twcc: u64,
+    next_send_id: u64,
+    pending_send_id: Option<net::SendId>,
     twcc_rx_register: TwccRecvRegister,
     twcc_tx_register: TwccSendRegister,
     max_rx_seq_lookup: HashMap<Ssrc, SeqNo>,
@@ -195,6 +197,8 @@ impl Session {
             last_nack: already_happened(),
             last_twcc: already_happened(),
             twcc: 0,
+            next_send_id: 0,
+            pending_send_id: None,
             twcc_rx_register: TwccRecvRegister::new(100),
             twcc_tx_register: TwccSendRegister::new(1000),
             max_rx_seq_lookup: HashMap::new(),
@@ -899,6 +903,7 @@ impl Session {
     }
 
     pub fn poll_datagram(&mut self, now: Instant) -> Option<net::DatagramSend> {
+        debug_assert!(self.pending_send_id.is_none());
         // Time must have progressed forward from start value.
         if now == already_happened() {
             return None;
@@ -921,6 +926,18 @@ impl Session {
         }
 
         x
+    }
+
+    pub fn take_send_id(&mut self) -> Option<net::SendId> {
+        self.pending_send_id.take()
+    }
+
+    pub fn report_send_time(&mut self, id: net::SendId, at: Instant) {
+        let updated = self.twcc_tx_register.update_send_time(id, at);
+        debug_assert!(
+            updated,
+            "send timestamp id must name a retained TWCC packet"
+        );
     }
 
     /// To be called in lieu of [`Self::poll_datagram`] when the owner is not in a position to transmit any
@@ -1042,8 +1059,12 @@ impl Session {
             } else {
                 TwccPacketId::new(twcc_seq)
             };
+            let send_id = net::SendId(self.next_send_id);
+            self.next_send_id = self.next_send_id.wrapping_add(1);
             self.twcc_tx_register
-                .register_seq(packet_id, now, payload_size);
+                .register_seq_pending(packet_id, send_id, now, payload_size);
+            debug_assert!(self.pending_send_id.is_none());
+            self.pending_send_id = Some(send_id);
         }
 
         // Update BWE subsystem

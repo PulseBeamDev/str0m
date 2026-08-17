@@ -1636,6 +1636,7 @@ impl IceAgent {
             source: local_addr,
             destination: remote_addr,
             contents: buf.into(),
+            send_id: None,
         };
 
         self.transmit.push_back(trans);
@@ -1667,6 +1668,7 @@ impl IceAgent {
             source: req.destination,
             destination: req.source,
             contents: buf.into(),
+            send_id: None,
         };
 
         self.transmit.push_back(trans);
@@ -1742,6 +1744,7 @@ impl IceAgent {
             source: local.base(),
             destination: remote.addr(),
             contents: buf.into(),
+            send_id: None,
         };
 
         self.transmit.push_back(trans);

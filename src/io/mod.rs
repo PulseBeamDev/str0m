@@ -31,7 +31,7 @@ pub use self::error::NetError;
 #[allow(unused_imports)]
 pub use self::error::StunError;
 
-pub use str0m_proto::{DatagramSend, Protocol, TcpType, Transmit};
+pub use str0m_proto::{DatagramSend, Protocol, SendId, TcpType, Transmit};
 
 #[derive(Debug, Serialize, Deserialize)]
 /// Received incoming data.

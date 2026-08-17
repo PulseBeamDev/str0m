@@ -25,7 +25,7 @@ mod id;
 pub use id::Id;
 
 mod net;
-pub use net::{DatagramSend, ParseTcpTypeError, Protocol, TcpType, Transmit};
+pub use net::{DatagramSend, ParseTcpTypeError, Protocol, SendId, TcpType, Transmit};
 
 mod sha1;
 pub use sha1::{CryptoSafe, Sha1HmacProvider};
