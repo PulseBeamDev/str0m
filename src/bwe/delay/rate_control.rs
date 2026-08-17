@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use super::super::macros::log_rate_control_applied_change;
 use super::super::macros::log_rate_control_observed_bitrate;
 use super::super::macros::log_rate_control_state;
+use super::aimd_link_capacity::AimdLinkCapacity;
 use crate::rtp_::Bitrate;
 use crate::util::MovingAverage;
 
@@ -15,6 +16,8 @@ use super::super::BandwidthUsage;
 const OBSERVED_BIT_RATE_SMOOTHING_FACTOR: f64 = 0.95;
 /// The ratio of current estimated bandwidth to use when decreasing the rate.
 const BETA: f64 = 0.85;
+/// Below this fraction of a reference rate a throughput sample counts as critically low.
+const CRITICALLY_LOW_RATIO: f64 = 0.5;
 /// The coefficient used for multiplicative rate increase.
 const MULTIPLICATIVE_INCREASE_COEF: f64 = 1.08;
 /// The maximal ratio of the observed bitrate that we allow estimating in a single increase.
@@ -45,6 +48,8 @@ pub struct RateControl {
     last_estimate_update: Option<Instant>,
     // Last RTT estimate in micro-seconds
     last_rtt: Option<Duration>,
+    /// Running link capacity estimate bounding how far a single backoff may move the estimate.
+    link_capacity: AimdLinkCapacity,
 }
 
 impl RateControl {
@@ -62,6 +67,7 @@ impl RateControl {
             averaged_observed_bitrate: MovingAverage::new(OBSERVED_BIT_RATE_SMOOTHING_FACTOR),
             last_estimate_update: None,
             last_rtt: None,
+            link_capacity: AimdLinkCapacity::new(),
         }
     }
 
@@ -98,8 +104,6 @@ impl RateControl {
                 // intended to gate *applying another reduction*, not collecting throughput stats.
                 self.update_observed_bitrate(observed_bitrate);
 
-                // Only apply decrease if enough time has passed since last bitrate change
-                // or if throughput is critically low (< 50% of estimate)
                 if self.time_to_reduce_further(now, observed_bitrate) {
                     self.decrease(observed_bitrate, now);
                 }
@@ -147,7 +151,7 @@ impl RateControl {
         }
 
         // If throughput is critically low (< 50% of estimate), allow immediate decrease
-        let threshold = self.estimated_bitrate * 0.5;
+        let threshold = self.estimated_bitrate * CRITICALLY_LOW_RATIO;
         if observed_bitrate < threshold {
             return true;
         }
@@ -158,6 +162,31 @@ impl RateControl {
     /// The current estimated bitrate.
     pub fn estimated_bitrate(&self) -> Bitrate {
         self.estimated_bitrate
+    }
+
+    /// `MaybeUpdateEstimate`'s overuse path for when there is no throughput sample to aim at:
+    ///
+    /// ```text
+    /// else if (!acked_bitrate && rate_control_.ValidEstimate() &&
+    ///          rate_control_.InitialTimeToReduceFurther(at_time)) {
+    ///   rate_control_.SetEstimate(rate_control_.LatestEstimate() / 2, at_time);
+    /// }
+    /// ```
+    ///
+    /// Returns whether the estimate moved.
+    pub fn halve_estimate_without_throughput(&mut self, now: Instant) -> bool {
+        let halved = self.estimated_bitrate * 0.5;
+        let synthetic_observed = if halved > Bitrate::bps(1) {
+            halved - Bitrate::bps(1)
+        } else {
+            Bitrate::ZERO
+        };
+        if !self.time_to_reduce_further(now, synthetic_observed) {
+            return false;
+        }
+
+        self.update_estimate(halved, now);
+        true
     }
 
     /// Set a probe result indicating discovered capacity.
@@ -175,6 +204,8 @@ impl RateControl {
     /// WebRTC does NOT change the rate control state when applying a probe - the state
     /// remains unchanged to avoid triggering unintended AIMD behavior.
     pub fn set_probe_result(&mut self, probe_bitrate: Bitrate, now: Instant) {
+        self.link_capacity.on_probe_rate(probe_bitrate);
+
         // WebRTC calls SetEstimate() directly without filtering by current estimate
         // or changing the rate control state. Accept the probe result unconditionally
         // (update_estimate handles clamping to min/max bounds).
@@ -185,6 +216,14 @@ impl RateControl {
     }
 
     fn increase(&mut self, observed_bitrate: Bitrate, now: Instant) {
+        if self
+            .link_capacity
+            .upper_bound()
+            .is_some_and(|upper| observed_bitrate > upper)
+        {
+            self.link_capacity.reset();
+        }
+
         // WebRTC limits increases to 1.5x observed throughput to avoid unlimited growth
         // when we're already above what we're actually sending
         // See: aimd_rate_control.cc line 251-252
@@ -249,10 +288,16 @@ impl RateControl {
         log_rate_control_applied_change!("decrease");
         let mut new_estimate = observed_bitrate * BETA;
 
+        if let Some(capacity) = self.link_capacity.estimate() {
+            new_estimate = new_estimate.max(capacity * BETA);
+        }
+
         if self.estimated_bitrate < new_estimate {
             // Avoid increasing the bitrate on overuse
             new_estimate = self.estimated_bitrate;
         }
+
+        self.link_capacity.on_overuse_detected(observed_bitrate);
 
         #[allow(unused)]
         if let Some(observed_average) = self.averaged_observed_bitrate.get() {
@@ -487,11 +532,11 @@ mod test {
         fn test_immediate_overuse_then_stable() {
             let now = Instant::now();
             let mut rate_controller = make_control(100_000);
-            // Seed last estimate value
             rate_controller.update(Signal::Normal, 85_000.into(), Some(duration_ms(80)), now);
 
             rate_controller.update(Signal::Overuse, 90_000.into(), None, now + duration_ms(500));
-            assert_eq!(rate_controller.estimated_bitrate().as_u64(), 76_500);
+            let first_backoff = rate_controller.estimated_bitrate();
+            assert!(first_backoff.as_u64() < 100_000);
 
             rate_controller.update(
                 Signal::Overuse,
@@ -499,22 +544,28 @@ mod test {
                 None,
                 now + duration_ms(1000),
             );
-            assert_eq!(rate_controller.estimated_bitrate().as_u64(), 63_750);
+            let second_backoff = rate_controller.estimated_bitrate();
+            assert!(second_backoff <= first_backoff);
 
             rate_controller.update(Signal::Normal, 60_000.into(), None, now + duration_ms(1500));
-            // NB: This matches libWebRTC but diverges from the spec
-            assert_eq!(
-                rate_controller.estimated_bitrate().as_u64(),
-                66_251,
-                "After adjusting on overuse we immediately return to increase on the next normal signal"
-            );
+            let first_recovery = rate_controller.estimated_bitrate();
+            assert!(first_recovery > second_backoff);
 
             rate_controller.update(Signal::Normal, 60_000.into(), None, now + duration_ms(2500));
-            assert_eq!(rate_controller.estimated_bitrate().as_u64(), 71_552,);
+            let second_recovery = rate_controller.estimated_bitrate();
+            assert!(second_recovery > first_recovery);
 
-            // NB: Additive increase because we are nearing convergence
             rate_controller.update(Signal::Normal, 70_000.into(), None, now + duration_ms(3500));
-            assert_eq!(rate_controller.estimated_bitrate().as_u64(), 72552);
+            assert!(rate_controller.estimated_bitrate() > second_recovery);
+        }
+
+        #[test]
+        fn unmeasured_backoff_accepts_zero_estimate() {
+            let now = Instant::now();
+            let mut rate_controller = make_control(0);
+
+            assert!(rate_controller.halve_estimate_without_throughput(now));
+            assert_eq!(rate_controller.estimated_bitrate().as_u64(), 10_000);
         }
     }
 

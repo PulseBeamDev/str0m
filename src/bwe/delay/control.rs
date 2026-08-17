@@ -99,6 +99,7 @@ impl DelayController {
             probe_bitrate,
             self.get_smoothed_rtt(),
             now,
+            true,
         );
         self.last_twcc_report = now;
 
@@ -131,6 +132,7 @@ impl DelayController {
             None,
             self.get_smoothed_rtt(),
             now,
+            false,
         );
     }
 
@@ -185,26 +187,44 @@ impl DelayController {
         probe_bitrate: Option<Bitrate>,
         mean_max_rtt: Option<Duration>,
         now: Instant,
+        allow_unmeasured_backoff: bool,
     ) {
-        // WebRTC's logic from delay_based_bwe.cc MaybeUpdateEstimate():
-        // - If we have a probe result, apply it directly and skip delay-based updates
-        // - Otherwise, apply normal delay-based rate control
+        // `delay_based_bwe.cc MaybeUpdateEstimate()`. The overuse hypothesis decides which
+        // half runs, and a probe result belongs to only one of them:
         //
-        // This prevents probe results from being immediately overridden by delay-based
-        // decreases caused by the probe itself (probes cause temporary queuing delay).
+        //   if (State() == kBwOverusing) { ...decrease paths... }
+        //   else { if (probe_bitrate) SetEstimate(*probe_bitrate); else UpdateEstimate(...); }
+        //
+        // Applying a probe while overusing is what let one overwrite a healthy estimate:
+        // 2.8Mbit/s down to 1.23Mbit/s in a single step, on a link carrying 1.36Mbit/s with
+        // no loss and nothing queued. A probe cluster is a handful of padding packets over a
+        // few milliseconds, so under congestion it measures the queue it is standing in
+        // rather than the path. The decrease paths already know what to do with that.
+        let overusing = hypothesis == BandwidthUsage::Overuse;
 
-        if let Some(probe_rate) = probe_bitrate {
-            // Apply probe result directly, bypassing delay-based updates
+        if let Some(probe_rate) = probe_bitrate.filter(|_| !overusing) {
+            // Not overusing: take the probe as it stands. Whether a cluster is worth
+            // believing is decided where WebRTC decides it, in the probe estimator's
+            // received-ratio and validity checks, not by clamping the result here.
             self.rate_control.set_probe_result(probe_rate, now);
             let estimated_rate = self.rate_control.estimated_bitrate();
             log_bitrate_estimate!(estimated_rate.as_f64());
             self.last_estimate = Some(estimated_rate);
         } else if let Some(observed_bitrate) = observed_bitrate {
-            // No probe result, apply normal delay-based rate control
             self.rate_control
                 .update(hypothesis.into(), observed_bitrate, mean_max_rtt, now);
             let estimated_rate = self.rate_control.estimated_bitrate();
 
+            log_bitrate_estimate!(estimated_rate.as_f64());
+            self.last_estimate = Some(estimated_rate);
+        } else if overusing
+            && allow_unmeasured_backoff
+            && self.rate_control.halve_estimate_without_throughput(now)
+        {
+            // Overusing with no throughput sample to back off against. WebRTC halves rather
+            // than holding, because holding an estimate it cannot measure is how a link that
+            // has genuinely collapsed keeps being overdriven.
+            let estimated_rate = self.rate_control.estimated_bitrate();
             log_bitrate_estimate!(estimated_rate.as_f64());
             self.last_estimate = Some(estimated_rate);
         }
@@ -222,5 +242,76 @@ impl DelayController {
                 .map(|rtt| rtt * 2)
                 .unwrap_or(MAX_TWCC_GAP)
                 .min(UPDATE_INTERVAL * 2)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn controller() -> DelayController {
+        DelayController::new(Bitrate::mbps(3))
+    }
+
+    /// A probe result may set the estimate, but only when the path is not overusing.
+    ///
+    /// `delay_based_bwe.cc MaybeUpdateEstimate()` puts the probe branch in the `else` of the
+    /// overuse check, and this is why: a probe cluster is a handful of padding packets over a
+    /// few milliseconds, so under congestion it measures the queue it is standing in. Applying
+    /// one anyway took a 2.8Mbit/s estimate to 1.23Mbit/s in a single step on a link carrying
+    /// 1.36Mbit/s, with no loss and nothing queued, and the subscriber lost a simulcast layer
+    /// for it.
+    #[test]
+    fn a_probe_result_is_ignored_while_overusing_and_applied_otherwise() {
+        let now = Instant::now();
+
+        let mut normal = controller();
+        normal.update_estimate(
+            BandwidthUsage::Normal,
+            None,
+            Some(Bitrate::kbps(1_233)),
+            None,
+            now,
+            true,
+        );
+        assert_eq!(
+            normal.last_estimate(),
+            Some(Bitrate::kbps(1_233)),
+            "not overusing: the probe is the measurement, applied as it stands"
+        );
+
+        let mut overusing = controller();
+        overusing.update_estimate(
+            BandwidthUsage::Overuse,
+            None,
+            Some(Bitrate::kbps(1_233)),
+            None,
+            now,
+            true,
+        );
+        assert_ne!(
+            overusing.last_estimate(),
+            Some(Bitrate::kbps(1_233)),
+            "overusing: the probe measured the queue, not the path"
+        );
+    }
+
+    /// Overusing with nothing to measure still has to back off.
+    ///
+    /// The `!acked_bitrate` arm of `MaybeUpdateEstimate`. Before the overuse gate existed a
+    /// probe would have been applied here; without this the same feedback would leave the
+    /// estimate untouched while the path says it is congested.
+    #[test]
+    fn overuse_without_a_throughput_sample_halves_the_estimate() {
+        let now = Instant::now();
+        let mut controller = controller();
+
+        controller.update_estimate(BandwidthUsage::Overuse, None, None, None, now, true);
+
+        assert_eq!(
+            controller.last_estimate(),
+            Some(Bitrate::mbps(3) * 0.5),
+            "a congested path with no sample to aim at still gives ground"
+        );
     }
 }
