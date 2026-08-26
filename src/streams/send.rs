@@ -854,7 +854,11 @@ impl StreamTx {
                 // is a headroom since we can accept slightly larger padding than asked for.
                 let max_size = (self.padding * 2).min(self.mtu_warn - MAX_RTP_OVERHEAD);
 
-                let Some(pkt) = self.rtx_cache.get_cached_packet_smaller_than(max_size) else {
+                let Some(pkt) = self
+                    .rtx_cache
+                    .get_cached_packet_smaller_than(max_size)
+                    .filter(|pkt| pkt.payload.len() >= MAX_BLANK_PADDING_PAYLOAD_SIZE as usize)
+                else {
                     // Couldn't find spurious packet, try a blank packet instead.
                     break 'outer;
                 };
@@ -1274,6 +1278,26 @@ struct Resend {
 mod test {
     use super::*;
 
+    fn padding_stream() -> StreamTx {
+        let mut stream = StreamTx::new(
+            42.into(),
+            Some(43.into()),
+            MidRid(Mid::from("0"), None),
+            false,
+            1200,
+        );
+        stream.pt_for_padding = Some(96.into());
+        stream
+    }
+
+    fn cache_packet(stream: &mut StreamTx, now: Instant, seq_no: u64, payload_size: usize) {
+        let mut packet = RtpPacket::blank();
+        packet.seq_no = seq_no.into();
+        packet.payload = vec![0; payload_size].into();
+        packet.nackable = true;
+        stream.rtx_cache.cache_sent_packet(packet, now);
+    }
+
     #[test]
     fn queue_info_is_cached_on_queue_state_update() {
         let mut stream = StreamTx::new(42.into(), None, MidRid(Mid::from("0"), None), false, 1200);
@@ -1326,5 +1350,31 @@ mod test {
             }),
             now + Duration::from_millis(750)
         );
+    }
+
+    #[test]
+    fn blank_padding_is_preferred_over_undersized_rtx() {
+        let now = Instant::now();
+        let mut stream = padding_stream();
+        cache_packet(&mut stream, now, 7, 100);
+        stream.padding = 500;
+
+        let packet = stream.poll_packet_padding(now).expect("padding packet");
+
+        assert_eq!(packet.kind, NextPacketKind::Blank(240));
+        assert_eq!(stream.padding, 260);
+    }
+
+    #[test]
+    fn sufficiently_large_rtx_is_still_reused_for_padding() {
+        let now = Instant::now();
+        let mut stream = padding_stream();
+        cache_packet(&mut stream, now, 7, 300);
+        stream.padding = 500;
+
+        let packet = stream.poll_packet_padding(now).expect("padding packet");
+
+        assert_eq!(packet.kind, NextPacketKind::Resend(7.into()));
+        assert_eq!(stream.padding, 200);
     }
 }

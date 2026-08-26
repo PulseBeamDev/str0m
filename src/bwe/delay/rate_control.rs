@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use super::super::macros::log_rate_control_applied_change;
 use super::super::macros::log_rate_control_observed_bitrate;
 use super::super::macros::log_rate_control_state;
+use super::link_capacity::LinkCapacity;
 use crate::rtp_::Bitrate;
 use crate::util::MovingAverage;
 
@@ -15,6 +16,8 @@ use super::super::BandwidthUsage;
 const OBSERVED_BIT_RATE_SMOOTHING_FACTOR: f64 = 0.95;
 /// The ratio of current estimated bandwidth to use when decreasing the rate.
 const BETA: f64 = 0.85;
+/// Below this fraction of a reference rate a throughput sample counts as critically low.
+const CRITICALLY_LOW_RATIO: f64 = 0.5;
 /// The coefficient used for multiplicative rate increase.
 const MULTIPLICATIVE_INCREASE_COEF: f64 = 1.08;
 /// The maximal ratio of the observed bitrate that we allow estimating in a single increase.
@@ -45,6 +48,13 @@ pub struct RateControl {
     last_estimate_update: Option<Instant>,
     // Last RTT estimate in micro-seconds
     last_rtt: Option<Duration>,
+    /// Running link capacity estimate bounding how far a single backoff may move the estimate.
+    link_capacity: LinkCapacity,
+    /// Whether the previous backoff distrusted its throughput sample as implausible.
+    distrusted_last_sample: bool,
+    /// Last known rate the sender is offering. Retained because only the feedback path carries
+    /// it; the timer path runs far more often and would otherwise see nothing.
+    offered_bitrate: Option<Bitrate>,
 }
 
 impl RateControl {
@@ -62,6 +72,9 @@ impl RateControl {
             averaged_observed_bitrate: MovingAverage::new(OBSERVED_BIT_RATE_SMOOTHING_FACTOR),
             last_estimate_update: None,
             last_rtt: None,
+            link_capacity: LinkCapacity::new(),
+            distrusted_last_sample: false,
+            offered_bitrate: None,
         }
     }
 
@@ -70,10 +83,14 @@ impl RateControl {
         &mut self,
         signal: Signal,
         observed_bitrate: Bitrate,
+        offered_bitrate: Option<Bitrate>,
         rtt: Option<Duration>,
         now: Instant,
     ) {
         self.last_observed_bitrate = Some(observed_bitrate);
+        if offered_bitrate.is_some() {
+            self.offered_bitrate = offered_bitrate;
+        }
         if let Some(rtt) = rtt {
             self.last_rtt = Some(rtt);
         }
@@ -100,7 +117,20 @@ impl RateControl {
 
                 // Only apply decrease if enough time has passed since last bitrate change
                 // or if throughput is critically low (< 50% of estimate)
-                if self.time_to_reduce_further(now, observed_bitrate) {
+                // A throughput sample can only account for traffic we actually offered. When it
+                // falls below half of what the sender is putting on the wire, more than half the
+                // offered rate is unaccounted for - which a delay signal alone cannot explain, and
+                // which is what a measurement window that predates a traffic onset looks like.
+                // Hold rather than back off to a number that does not describe the path yet; the
+                // next window measures the traffic that is actually flowing.
+                let sample_is_stale = self.offered_bitrate.is_some_and(|offered| {
+                    observed_bitrate.as_f64() < offered.as_f64() * CRITICALLY_LOW_RATIO
+                });
+
+                if sample_is_stale {
+                    self.state = State::Hold;
+                    log_rate_control_state!(self.state as i8);
+                } else if self.time_to_reduce_further(now, observed_bitrate) {
                     self.decrease(observed_bitrate, now);
                 }
             }
@@ -147,7 +177,7 @@ impl RateControl {
         }
 
         // If throughput is critically low (< 50% of estimate), allow immediate decrease
-        let threshold = self.estimated_bitrate * 0.5;
+        let threshold = self.estimated_bitrate * CRITICALLY_LOW_RATIO;
         if observed_bitrate < threshold {
             return true;
         }
@@ -175,6 +205,8 @@ impl RateControl {
     /// WebRTC does NOT change the rate control state when applying a probe - the state
     /// remains unchanged to avoid triggering unintended AIMD behavior.
     pub fn set_probe_result(&mut self, probe_bitrate: Bitrate, now: Instant) {
+        self.link_capacity.on_probe_rate(probe_bitrate);
+
         // WebRTC calls SetEstimate() directly without filtering by current estimate
         // or changing the rate control state. Accept the probe result unconditionally
         // (update_estimate handles clamping to min/max bounds).
@@ -185,6 +217,14 @@ impl RateControl {
     }
 
     fn increase(&mut self, observed_bitrate: Bitrate, now: Instant) {
+        if self
+            .link_capacity
+            .upper_bound()
+            .is_some_and(|upper| observed_bitrate > upper)
+        {
+            self.link_capacity.reset();
+        }
+
         // WebRTC limits increases to 1.5x observed throughput to avoid unlimited growth
         // when we're already above what we're actually sending
         // See: aimd_rate_control.cc line 251-252
@@ -249,10 +289,43 @@ impl RateControl {
         log_rate_control_applied_change!("decrease");
         let mut new_estimate = observed_bitrate * BETA;
 
+        // Backing off to the measured throughput assumes that throughput measures the path. It
+        // does not when the sender was application limited: right after a traffic onset the acked
+        // rate still describes the idle period before it, and obeying it collapses the estimate by
+        // orders of magnitude - from which the `observed * 1.5` increase cap cannot recover,
+        // because the allocator can then only offer what the collapsed estimate allows.
+        //
+        // Only distrust the sample when it falls outside the plausible range of the capacity the
+        // path has demonstrated - libWebRTC's own `LinkCapacityEstimator` lower bound, three
+        // standard deviations below the estimate, rather than a tuned threshold. An ordinary
+        // congestion backoff sits inside that range and passes through untouched.
+        //
+        // Distrust it only once. A single outlier is noise; one that repeats is the path telling
+        // us the capacity estimate is the stale value, so the second one drops that estimate and
+        // lets the backoff through. Without that, a stale capacity could block a genuine backoff
+        // and drive the link into real congestion.
+        let implausible = self
+            .link_capacity
+            .lower_bound()
+            .is_some_and(|lower| observed_bitrate < lower);
+
+        if implausible && !self.distrusted_last_sample {
+            if let Some(capacity) = self.link_capacity.estimate() {
+                new_estimate = new_estimate.max(capacity * BETA);
+            }
+        } else if implausible {
+            // The sample was already distrusted once and has not recovered, so it is the capacity
+            // estimate that is stale, not the measurement. Drop it and relearn from the path.
+            self.link_capacity.reset();
+        }
+        self.distrusted_last_sample = implausible;
+
         if self.estimated_bitrate < new_estimate {
             // Avoid increasing the bitrate on overuse
             new_estimate = self.estimated_bitrate;
         }
+
+        self.link_capacity.on_overuse_detected(observed_bitrate);
 
         #[allow(unused)]
         if let Some(observed_average) = self.averaged_observed_bitrate.get() {
@@ -418,17 +491,29 @@ mod test {
             let now = Instant::now();
             let mut rate_controller = make_control(100_000);
             // Seed last estimate value
-            rate_controller.update(Signal::Normal, 85_000.into(), None, now);
+            rate_controller.update(Signal::Normal, 85_000.into(), None, None, now);
             assert_eq!(
                 rate_controller.estimated_bitrate().as_u64(),
                 101_000,
                 "Initial estimate should increase by the minimum(1Kbit/s)"
             );
 
-            rate_controller.update(Signal::Normal, 95_000.into(), None, now + duration_ms(500));
+            rate_controller.update(
+                Signal::Normal,
+                95_000.into(),
+                None,
+                None,
+                now + duration_ms(500),
+            );
             assert_eq!(rate_controller.estimated_bitrate().as_u64(), 104_963);
 
-            rate_controller.update(Signal::Normal, 97_000.into(), None, now + duration_ms(1000));
+            rate_controller.update(
+                Signal::Normal,
+                97_000.into(),
+                None,
+                None,
+                now + duration_ms(1000),
+            );
             assert_eq!(rate_controller.estimated_bitrate().as_u64(), 109_081);
         }
 
@@ -437,7 +522,7 @@ mod test {
             let now = Instant::now();
             let mut rate_controller = make_control(100_000);
             // Seed last estimate value
-            rate_controller.update(Signal::Normal, 85_000.into(), None, now);
+            rate_controller.update(Signal::Normal, 85_000.into(), None, None, now);
             assert_eq!(
                 rate_controller.estimated_bitrate().as_u64(),
                 101_000,
@@ -445,13 +530,20 @@ mod test {
             );
 
             // Should remain in increase and increase estimate
-            rate_controller.update(Signal::Normal, 95_000.into(), None, now + duration_ms(500));
+            rate_controller.update(
+                Signal::Normal,
+                95_000.into(),
+                None,
+                None,
+                now + duration_ms(500),
+            );
             assert_eq!(rate_controller.estimated_bitrate().as_u64(), 104_963);
 
             // Should transition to hold
             rate_controller.update(
                 Signal::Underuse,
                 97_000.into(),
+                None,
                 None,
                 now + duration_ms(1000),
             );
@@ -461,6 +553,7 @@ mod test {
             rate_controller.update(
                 Signal::Underuse,
                 97_000.into(),
+                None,
                 None,
                 now + duration_ms(2000),
             );
@@ -472,9 +565,15 @@ mod test {
             let now = Instant::now();
             let mut rate_controller = make_control(100_000);
             // Seed last estimate value
-            rate_controller.update(Signal::Normal, 85_000.into(), None, now);
+            rate_controller.update(Signal::Normal, 85_000.into(), None, None, now);
 
-            rate_controller.update(Signal::Overuse, 90_000.into(), None, now + duration_ms(500));
+            rate_controller.update(
+                Signal::Overuse,
+                90_000.into(),
+                None,
+                None,
+                now + duration_ms(500),
+            );
             assert_eq!(
                 rate_controller.estimated_bitrate().as_u64(),
                 76_500,
@@ -484,24 +583,85 @@ mod test {
         }
 
         #[test]
+        fn a_throughput_sample_far_below_the_offered_rate_holds_instead_of_backing_off() {
+            let now = Instant::now();
+            let mut rate_controller = make_control(2_620_000);
+            rate_controller.update(Signal::Normal, 2_600_000.into(), None, None, now);
+            let before = rate_controller.estimated_bitrate();
+
+            // Right after a traffic onset the acked estimator still describes the idle period
+            // before it: we are offering 1.4Mbit/s but the sample reads 79kbit/s.
+            rate_controller.update(
+                Signal::Overuse,
+                79_000.into(),
+                Some(1_400_000.into()),
+                None,
+                now + duration_ms(500),
+            );
+
+            assert_eq!(
+                rate_controller.estimated_bitrate(),
+                before,
+                "a sample accounting for under half the offered rate must not drive the estimate"
+            );
+        }
+
+        #[test]
+        fn a_credible_sample_still_backs_off_when_the_offered_rate_is_known() {
+            let now = Instant::now();
+            let mut rate_controller = make_control(100_000);
+            rate_controller.update(Signal::Normal, 85_000.into(), None, None, now);
+
+            // The sample accounts for most of what we offered, so it describes the path.
+            rate_controller.update(
+                Signal::Overuse,
+                90_000.into(),
+                Some(100_000.into()),
+                None,
+                now + duration_ms(500),
+            );
+
+            assert_eq!(rate_controller.estimated_bitrate().as_u64(), 76_500);
+        }
+
+        #[test]
         fn test_immediate_overuse_then_stable() {
             let now = Instant::now();
             let mut rate_controller = make_control(100_000);
             // Seed last estimate value
-            rate_controller.update(Signal::Normal, 85_000.into(), Some(duration_ms(80)), now);
+            rate_controller.update(
+                Signal::Normal,
+                85_000.into(),
+                None,
+                Some(duration_ms(80)),
+                now,
+            );
 
-            rate_controller.update(Signal::Overuse, 90_000.into(), None, now + duration_ms(500));
+            rate_controller.update(
+                Signal::Overuse,
+                90_000.into(),
+                None,
+                None,
+                now + duration_ms(500),
+            );
             assert_eq!(rate_controller.estimated_bitrate().as_u64(), 76_500);
 
             rate_controller.update(
                 Signal::Overuse,
                 75_000.into(),
                 None,
+                None,
                 now + duration_ms(1000),
             );
             assert_eq!(rate_controller.estimated_bitrate().as_u64(), 63_750);
 
-            rate_controller.update(Signal::Normal, 60_000.into(), None, now + duration_ms(1500));
+            rate_controller.update(
+                Signal::Normal,
+                60_000.into(),
+                None,
+                None,
+                now + duration_ms(1500),
+            );
             // NB: This matches libWebRTC but diverges from the spec
             assert_eq!(
                 rate_controller.estimated_bitrate().as_u64(),
@@ -509,11 +669,23 @@ mod test {
                 "After adjusting on overuse we immediately return to increase on the next normal signal"
             );
 
-            rate_controller.update(Signal::Normal, 60_000.into(), None, now + duration_ms(2500));
+            rate_controller.update(
+                Signal::Normal,
+                60_000.into(),
+                None,
+                None,
+                now + duration_ms(2500),
+            );
             assert_eq!(rate_controller.estimated_bitrate().as_u64(), 71_552,);
 
             // NB: Additive increase because we are nearing convergence
-            rate_controller.update(Signal::Normal, 70_000.into(), None, now + duration_ms(3500));
+            rate_controller.update(
+                Signal::Normal,
+                70_000.into(),
+                None,
+                None,
+                now + duration_ms(3500),
+            );
             assert_eq!(rate_controller.estimated_bitrate().as_u64(), 72552);
         }
     }

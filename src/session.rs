@@ -1158,6 +1158,13 @@ impl Session {
         }
     }
 
+    pub fn set_bwe_current_bitrate(&mut self, current_bitrate: Bitrate) {
+        if let Some(bwe) = self.bwe.as_mut() {
+            bwe.set_current_bitrate(current_bitrate);
+            self.configure_pacer();
+        }
+    }
+
     pub fn reset_bwe(&mut self, init_bitrate: Bitrate) {
         if let Some(bwe) = self.bwe.as_mut() {
             bwe.reset(init_bitrate);
@@ -1183,6 +1190,7 @@ impl Session {
     }
 
     fn configure_pacer(&mut self) {
+        let has_active_media = self.has_active_outgoing_media();
         let Some(bwe) = self.bwe.as_mut() else {
             return;
         };
@@ -1191,14 +1199,16 @@ impl Session {
             // No estimate yet, no padding
             return;
         };
+        let current_bitrate = bwe.current_bitrate();
         let is_overuse = bwe.is_overusing();
 
-        let has_active_media = self.has_active_outgoing_media();
-
         // Calculate pacing and padding rates
-        let result = self
-            .pacer_control
-            .calculate(has_active_media, current_estimate, is_overuse);
+        let result = self.pacer_control.calculate(
+            current_bitrate,
+            has_active_media,
+            current_estimate,
+            is_overuse,
+        );
 
         self.pacer.set_padding_rate(result.padding_rate);
         self.pacer.set_pacing_rate(result.pacing_rate);
