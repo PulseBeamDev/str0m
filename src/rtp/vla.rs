@@ -483,7 +483,7 @@ fn read_bits(bits: u8, range: std::ops::Range<u8>) -> u8 {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
 
     fn serialize(vla: Option<&VideoLayersAllocation>) -> Vec<u8> {

@@ -6,7 +6,7 @@ use std::ops::Index;
 pub struct ReportList<T>([Option<T>; 31]);
 
 impl<T> ReportList<T> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         ReportList::default()
     }
 
@@ -15,7 +15,7 @@ impl<T> ReportList<T> {
         self.0.iter().position(|i| i.is_none()).unwrap_or(31)
     }
 
-    pub(crate) fn push(&mut self, v: T) {
+    pub fn push(&mut self, v: T) {
         let pos = self.len();
         self.0[pos] = Some(v);
     }
@@ -35,7 +35,7 @@ impl<T> ReportList<T> {
         self.len() == 0
     }
 
-    pub(crate) fn lists_from_iter(iterator: impl IntoIterator<Item = T>) -> Vec<Self> {
+    pub fn lists_from_iter(iterator: impl IntoIterator<Item = T>) -> Vec<Self> {
         let mut result = vec![];
         let mut current = Self::default();
 
@@ -55,13 +55,13 @@ impl<T> ReportList<T> {
         result
     }
 
-    pub(crate) fn is_full(&self) -> bool {
+    pub fn is_full(&self) -> bool {
         self.len() == 31
     }
 }
 
 impl<T: private::WordSized> ReportList<T> {
-    pub(crate) fn append_all_possible(&mut self, other: &mut Self, mut words_left: usize) -> usize {
+    pub fn append_all_possible(&mut self, other: &mut Self, mut words_left: usize) -> usize {
         // Position where we start inserting in self.
         let pos = self.len();
 
@@ -103,7 +103,7 @@ impl<T: private::WordSized> ReportList<T> {
     }
 }
 
-pub(crate) mod private {
+pub mod private {
     pub trait WordSized {
         fn word_size(&self) -> usize;
     }
@@ -207,7 +207,7 @@ impl<T: fmt::Debug> fmt::Debug for ReportList<T> {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::ReportList;
 
     #[test]

@@ -38,7 +38,7 @@ pub struct Dtls {
     mtu: RangeInclusive<usize>,
 }
 
-pub(crate) fn is_would_block(error: &DtlsError) -> bool {
+pub fn is_would_block(error: &DtlsError) -> bool {
     match error {
         DtlsError::Io(e) => e.kind() == io::ErrorKind::WouldBlock,
         DtlsError::CryptoError(crypto_err) => match crypto_err {

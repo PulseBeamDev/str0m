@@ -35,7 +35,7 @@ impl CodecSpec {
     ///
     /// See RFC 3551 §4.5.2 and
     /// <https://en.wikipedia.org/wiki/RTP_payload_formats#cite_note-55>
-    pub(crate) fn rtp_clock_rate(&self) -> Frequency {
+    pub fn rtp_clock_rate(&self) -> Frequency {
         if self.codec == Codec::G722 {
             Frequency::EIGHT_KHZ
         } else {
@@ -146,7 +146,7 @@ impl fmt::Display for Codec {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
     use crate::format::FormatParams;
     use crate::rtp_::{Frequency, MediaTime};

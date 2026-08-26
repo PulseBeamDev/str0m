@@ -283,7 +283,7 @@ impl<'a> TryFrom<&'a [u8]> for Sdes {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
 
     #[test]

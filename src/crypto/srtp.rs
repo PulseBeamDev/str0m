@@ -16,7 +16,7 @@ pub enum SrtpProfile {
 #[allow(dead_code)]
 impl SrtpProfile {
     // All the profiles we support, ordered from most preferred to least.
-    pub(crate) const ALL: &'static [SrtpProfile] = &[
+    pub const ALL: &'static [SrtpProfile] = &[
         SrtpProfile::AeadAes256Gcm,
         SrtpProfile::AeadAes128Gcm,
         SrtpProfile::Aes128CmSha1_80,
@@ -24,7 +24,7 @@ impl SrtpProfile {
 
     /// The length of keying material to extract from the DTLS session in bytes.
     #[rustfmt::skip]
-    pub(crate) fn keying_material_len(&self) -> usize {
+    pub fn keying_material_len(&self) -> usize {
         match self {
             #[cfg(feature = "_internal_test_exports")]
             SrtpProfile::PassThrough => 0,

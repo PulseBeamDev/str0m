@@ -71,7 +71,7 @@ impl std::str::FromStr for Fingerprint {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
 
     #[test]

@@ -42,7 +42,7 @@ impl Direction {
 
     /// When negotiating SDP, in certain cases, we need to treat `Inactive`
     /// as if it is receiving.
-    pub(crate) fn sdp_is_receiving(&self) -> bool {
+    pub fn sdp_is_receiving(&self) -> bool {
         // The spec says:
         //
         // > For streams marked as inactive in the answer, the list of media
