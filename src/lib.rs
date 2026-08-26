@@ -715,7 +715,7 @@ pub(crate) use drv_identity_copy;
 pub mod crypto;
 use crypto::Fingerprint;
 
-mod dtls;
+pub mod dtls;
 use crate::crypto::dtls::DtlsOutput;
 use crate::crypto::{CryptoProvider, DtlsError, from_feature_flags};
 use crate::dtls::is_would_block;
@@ -762,7 +762,7 @@ use io::DatagramRecvInner;
 mod packet;
 
 #[path = "rtp/mod.rs"]
-mod rtp_;
+pub mod rtp_;
 use rtp_::{Bitrate, DataSize};
 
 /// Low level RTP access.
@@ -821,7 +821,7 @@ pub mod bwe {
 mod sctp;
 use sctp::{RtcSctp, SctpEvent, SctpInitData};
 
-mod sdp;
+pub mod sdp;
 
 pub mod format;
 use format::CodecConfig;

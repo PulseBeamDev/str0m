@@ -100,7 +100,7 @@ impl RtcpFb {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::super::AppSpecificFeedback;
     use super::*;
     use std::collections::VecDeque;

@@ -2,13 +2,13 @@
 
 use super::{FeedbackMessageType, PayloadType, TransportType};
 
-pub(crate) const LEN_HEADER: usize = 4;
+pub const LEN_HEADER: usize = 4;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct RtcpHeader {
-    pub(crate) rtcp_type: RtcpType,
-    pub(crate) feedback_message_type: FeedbackMessageType,
-    pub(crate) words_less_one: u16,
+    pub rtcp_type: RtcpType,
+    pub feedback_message_type: FeedbackMessageType,
+    pub words_less_one: u16,
 }
 
 impl RtcpHeader {
@@ -93,7 +93,7 @@ impl RtcpHeader {
     }
 
     /// Write header to buffer.
-    pub(crate) fn write_to(&self, buf: &mut [u8]) -> usize {
+    pub fn write_to(&self, buf: &mut [u8]) -> usize {
         let fmt: u8 = self.feedback_message_type.into();
 
         buf[0] = 0b10_0_00000 | fmt;

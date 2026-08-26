@@ -37,7 +37,7 @@ pub struct RtpHeader {
 }
 
 impl RtpHeader {
-    pub(crate) fn write_to(&self, buf: &mut [u8], exts: &ExtensionMap) -> usize {
+    pub fn write_to(&self, buf: &mut [u8], exts: &ExtensionMap) -> usize {
         assert!(self.csrc_count <= 15, "CSRC count must be <= 15");
         buf[0] = 0b10_0_0_0000
             | if self.has_padding { 1 << 5 } else { 0 }
@@ -117,7 +117,7 @@ impl RtpHeader {
 
     /// Returns `buf` with any trailing SRTP padding removed, or `None` if the
     /// trailing padding length is invalid.
-    pub(crate) fn unpad_payload(buf: &[u8]) -> Option<&[u8]> {
+    pub fn unpad_payload(buf: &[u8]) -> Option<&[u8]> {
         if buf.is_empty() {
             return Some(buf);
         }
@@ -126,7 +126,7 @@ impl RtpHeader {
         Some(&buf[..unpadded_len])
     }
 
-    pub(crate) fn parse(buf: &[u8], exts: &ExtensionMap) -> Option<RtpHeader> {
+    pub fn parse(buf: &[u8], exts: &ExtensionMap) -> Option<RtpHeader> {
         let orig_len = buf.len();
         if buf.len() < 12 {
             trace!("RTP header too short < 12: {}", buf.len());
@@ -330,7 +330,7 @@ impl Default for RtpHeader {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use crate::util::already_happened;
     use crate::{io::DATAGRAM_MAX_PACKET_SIZE, rtp_::Extension};
     use std::time::Duration;

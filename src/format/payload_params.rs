@@ -10,7 +10,7 @@ use crate::rtp_::Pt;
 use super::codec::{Codec, CodecSpec};
 
 /// Preferred ranges for dynamic payload type allocation.
-pub(crate) const PREFERED_RANGES: &[RangeInclusive<usize>] = &[
+pub const PREFERED_RANGES: &[RangeInclusive<usize>] = &[
     // Payload identifiers 96–127 are used for payloads defined dynamically during a session.
     96..=127,
     // "unassigned" ranged. note that RTCP packet type 207 (XR, Extended Reports) would be
@@ -24,7 +24,7 @@ pub(crate) const PREFERED_RANGES: &[RangeInclusive<usize>] = &[
     35..=71,
 ];
 
-pub(crate) trait Claimed {
+pub trait Claimed {
     fn assert_claim_once(&mut self, pt: Pt);
     fn is_claimed(&self, pt: Pt) -> bool;
     fn find_unclaimed(
@@ -79,36 +79,36 @@ impl Claimed for [bool; 128] {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct PayloadParams {
     /// The payload type that groups these parameters.
-    pub(crate) pt: Pt,
+    pub pt: Pt,
 
     /// Whether these parameters are repairing some other set of parameters.
     /// This is used to, via PT, separate RTX resend streams from the main stream.
-    pub(crate) resend: Option<Pt>,
+    pub resend: Option<Pt>,
 
     /// The codec with settings for this group of parameters.
-    pub(crate) spec: CodecSpec,
+    pub spec: CodecSpec,
 
     /// Whether the payload use the TWCC feedback mechanic.
-    pub(crate) fb_transport_cc: bool,
+    pub fb_transport_cc: bool,
 
     /// Whether the payload uses NACK to request resends.
-    pub(crate) fb_nack: bool,
+    pub fb_nack: bool,
 
     /// Whether the payload uses the PLI (Picture Loss Indication) mechanic.
-    pub(crate) fb_pli: bool,
+    pub fb_pli: bool,
 
     /// Whether the payload uses the FIR (Full Intra Request) mechanic.
-    pub(crate) fb_fir: bool,
+    pub fb_fir: bool,
 
     /// Whether the payload uses the REMB (Receiver Estimated Maximum Bitrate) mechanic.
-    pub(crate) fb_remb: bool,
+    pub fb_remb: bool,
 
     /// Whether the payload is locked by negotiation or can still be debated.
     ///
     /// If we make an OFFER or ANSWER and the direction is sendrecv/recvonly, the parameters are locked
     /// can't be further changed. If we make an OFFER for a sendonly, the parameters are only proposed
     /// and don't lock.
-    pub(crate) locked: bool,
+    pub locked: bool,
 }
 
 // we don't want to compare "locked"
@@ -175,7 +175,7 @@ impl PayloadParams {
     ///
     /// These probes don't carry real media, only padding for bandwidth estimation.
     /// Uses 90kHz clock rate (video rate) and enables only transport_cc feedback.
-    pub(crate) fn new_probe(pt: Pt) -> Self {
+    pub fn new_probe(pt: Pt) -> Self {
         use super::codec::Codec;
         use super::format_params::FormatParams;
         use crate::rtp_::Frequency;
@@ -264,7 +264,7 @@ impl PayloadParams {
         self.fb_remb
     }
 
-    pub(crate) fn match_score(&self, o: &PayloadParams) -> Option<usize> {
+    pub fn match_score(&self, o: &PayloadParams) -> Option<usize> {
         // we don't want to compare PT
         let c0 = self.spec;
         let c1 = o.spec;
@@ -406,7 +406,7 @@ impl PayloadParams {
         Some(Self::EXACT_MATCH_SCORE)
     }
 
-    pub(crate) fn match_h264_score(c0: CodecSpec, c1: CodecSpec) -> Option<usize> {
+    pub fn match_h264_score(c0: CodecSpec, c1: CodecSpec) -> Option<usize> {
         // Default packetization mode is 0. https://www.rfc-editor.org/rfc/rfc6184#section-6.2
         let c0_packetization_mode = c0.format.packetization_mode.unwrap_or(0);
         let c1_packetization_mode = c1.format.packetization_mode.unwrap_or(0);
@@ -471,7 +471,7 @@ impl PayloadParams {
     /// - `Some(100 - level_gap)` for profile/tier match with level difference
     /// - `Some(90)` for profile-only match (when tier/level unavailable)
     /// - `None` for profile or tier mismatch
-    pub(crate) fn match_h265_score(c0: CodecSpec, c1: CodecSpec) -> Option<usize> {
+    pub fn match_h265_score(c0: CodecSpec, c1: CodecSpec) -> Option<usize> {
         match (
             c0.format.h265_profile_tier_level,
             c1.format.h265_profile_tier_level,
@@ -534,7 +534,7 @@ impl PayloadParams {
         }
     }
 
-    pub(crate) fn match_h266_score(c0: CodecSpec, c1: CodecSpec) -> Option<usize> {
+    pub fn match_h266_score(c0: CodecSpec, c1: CodecSpec) -> Option<usize> {
         match (
             c0.format.h266_profile_tier_level,
             c1.format.h266_profile_tier_level,
@@ -590,7 +590,7 @@ impl PayloadParams {
         }
     }
 
-    pub(crate) fn update_param(
+    pub fn update_param(
         &mut self,
         remote_pts: &[PayloadParams],
         claimed: &mut [bool; 128],
@@ -755,13 +755,13 @@ impl PayloadParams {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use crate::rtp_::Frequency;
 
     use super::*;
     use crate::format::{CodecSpec, FormatParams};
 
-    mod h264 {
+    pub mod h264 {
         use super::*;
 
         fn h264_codec_spec(
@@ -941,7 +941,7 @@ mod test {
         }
     }
 
-    mod h265 {
+    pub mod h265 {
         use super::*;
         use crate::packet::Packetizer;
 
@@ -1410,7 +1410,7 @@ mod test {
         }
     }
 
-    mod h266 {
+    pub mod h266 {
         use super::*;
         use crate::packet::H266ProfileTierLevel;
         use crate::packet::Packetizer;

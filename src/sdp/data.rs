@@ -27,7 +27,7 @@ pub struct Sdp {
 }
 
 impl Sdp {
-    pub(crate) fn parse(input: &str) -> Result<Sdp, SdpError> {
+    pub fn parse(input: &str) -> Result<Sdp, SdpError> {
         sdp_parser()
             .easy_parse(input)
             .map(|(sdp, _)| sdp)
@@ -35,7 +35,7 @@ impl Sdp {
     }
 
     /// Get the MIDs listed in the BUNDLE group, if any.
-    pub(crate) fn bundle_mids(&self) -> Option<&[Mid]> {
+    pub fn bundle_mids(&self) -> Option<&[Mid]> {
         self.session.attrs.iter().find_map(|a| {
             if let SessionAttribute::Group { typ, mids } = a {
                 if typ == "BUNDLE" {
@@ -46,26 +46,26 @@ impl Sdp {
         })
     }
 
-    pub(crate) fn assert_consistency(&self) -> Result<(), SdpError> {
+    pub fn assert_consistency(&self) -> Result<(), SdpError> {
         match self.do_assert_consistency() {
             None => Ok(()),
             Some(error) => Err(SdpError::Inconsistent(error)),
         }
     }
 
-    pub(crate) fn fingerprint(&self) -> Option<Fingerprint> {
+    pub fn fingerprint(&self) -> Option<Fingerprint> {
         self.session
             .fingerprint()
             .or_else(|| self.media_lines.iter().find_map(|m| m.fingerprint()))
     }
 
-    pub(crate) fn ice_creds(&self) -> Option<IceCreds> {
+    pub fn ice_creds(&self) -> Option<IceCreds> {
         self.session
             .ice_creds()
             .or_else(|| self.media_lines.iter().find_map(|m| m.ice_creds()))
     }
 
-    pub(crate) fn ice_candidates(&self) -> impl Iterator<Item = &Candidate> {
+    pub fn ice_candidates(&self) -> impl Iterator<Item = &Candidate> {
         let mut candidates: HashSet<&Candidate> = HashSet::new();
 
         // Session level ice candidates.
@@ -82,14 +82,14 @@ impl Sdp {
     /// Get the `a=sctp-init` value from the application m-line, if present.
     ///
     /// Returns the base64-encoded SCTP INIT value.
-    pub(crate) fn sctp_init(&self) -> Option<&str> {
+    pub fn sctp_init(&self) -> Option<&str> {
         self.media_lines
             .iter()
             .find(|m| m.typ.is_channel())
             .and_then(|m| m.sctp_init())
     }
 
-    pub(crate) fn setup(&self) -> Option<Setup> {
+    pub fn setup(&self) -> Option<Setup> {
         self.session
             .setup()
             .or_else(|| self.media_lines.iter().find_map(|m| m.setup()))
@@ -1107,7 +1107,7 @@ impl fmt::Display for FormatParam {
 }
 
 impl PayloadParams {
-    pub(crate) fn as_media_attrs(&self, attrs: &mut Vec<MediaAttribute>) {
+    pub fn as_media_attrs(&self, attrs: &mut Vec<MediaAttribute>) {
         attrs.push(MediaAttribute::RtpMap {
             pt: self.pt,
             value: self.spec.into(),
@@ -1564,7 +1564,7 @@ impl<'a> std::fmt::Display for FingerprintFmt<'a> {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use crate::VERSION;
     use crate::packet::H265ProfileTierLevel;
     use crate::rtp_::{Extension, Frequency};
@@ -1573,7 +1573,7 @@ mod test {
 
     /// Tests for general format parameter serialization and parsing.
     /// These tests verify that format parameters can be correctly converted to/from strings.
-    mod format_params {
+    pub mod format_params {
         use super::*;
 
         #[test]
@@ -1590,7 +1590,7 @@ mod test {
 
     /// Tests for SDP parsing, structure validation, and serialization.
     /// Covers error handling, SDP generation, BUNDLE groups, and media line configuration.
-    mod sdp_parsing {
+    pub mod sdp_parsing {
         use super::*;
 
         #[test]
@@ -1914,7 +1914,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
 
     /// Opus codec-specific tests.
     /// These tests are mainly verify SDP format params.
-    mod opus_codec {
+    pub mod opus_codec {
         use super::*;
 
         #[test]
@@ -1951,7 +1951,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// Core H.265 (HEVC) codec-specific tests.
     /// Tests basic H.265 parameter handling including profile-tier-level parsing,
     /// serialization, and format parameter combinations.
-    mod h265_codec {
+    pub mod h265_codec {
         use super::*;
 
         /// Test that H.265 format parameters can be serialized to a string and parsed back
@@ -2136,7 +2136,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// Verifies that H.265's three-parameter format (profile-id, tier-flag, level-id)
     /// is correctly distinguished from H.264's profile-level-id, VP9's profile-id,
     /// and AV1's profile/tier/level-idx parameters.
-    mod no_confusion {
+    pub mod no_confusion {
         use super::*;
 
         /// Test that H.264's profile-level-id parameter (single hex value) is not confused
@@ -2234,7 +2234,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
 
     /// Additional H.265 parsing and validation tests.
     /// Covers incomplete parameter handling and complete SDP integration scenarios.
-    mod h265_additional {
+    pub mod h265_additional {
         use super::*;
 
         /// Test that incomplete H.265 parameter sets do not create a composite ProfileTierLevel.
@@ -2312,7 +2312,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// Multi-codec integration tests.
     /// Verifies that multiple video codecs (H.264, H.265, VP8, VP9) can coexist
     /// in the same SDP without parameter conflicts or interference.
-    mod multi_codec {
+    pub mod multi_codec {
         use super::*;
 
         /// Test that H.264, H.265, and other video codecs can coexist in the same SDP
@@ -2379,7 +2379,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// H.265 serialization and edge case tests.
     /// Tests media attribute generation, empty parameter handling, extreme values,
     /// parameter ordering independence, DONL parameters, and invalid value handling.
-    mod h265_serialization {
+    pub mod h265_serialization {
         use super::*;
 
         /// Test that H.265 parameters are correctly serialized as media attributes,
@@ -2600,7 +2600,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// H.265 integration with RTCP feedback mechanisms.
     /// Tests H.265 behavior with multiple codecs and various RTCP feedback types
     /// including NACK, PLI, FIR, and transport-cc.
-    mod h265_integration {
+    pub mod h265_integration {
         use super::*;
 
         /// Test H.265 in SDP with multiple video codecs and feedback mechanisms.
@@ -2671,7 +2671,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// Covers SDP round-trip serialization, incomplete parameter permutations,
     /// browser compatibility (Chrome profile-only mode), and validation of all
     /// standard H.265 level values (1.0 through 6.2).
-    mod h265_advanced {
+    pub mod h265_advanced {
         use super::*;
 
         /// Test H.265 SDP serialization maintains parameter integrity.
@@ -2837,7 +2837,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// Core H.266 (VVC) codec-specific tests, mirrored from h265_codec.
     /// Tests basic H.266 parameter handling including profile-tier-level parsing,
     /// serialization, and format parameter combinations.
-    mod h266_codec {
+    pub mod h266_codec {
         use super::*;
 
         /// Test that H.266 format parameters can be serialized to a string and parsed back
@@ -3022,7 +3022,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// Verifies that H.266's three-parameter format (profile-id, tier-flag, level-id)
     /// is correctly distinguished from H.264's profile-level-id, VP9's profile-id,
     /// and AV1's profile/tier/level-idx parameters.
-    mod no_confusion_h266 {
+    pub mod no_confusion_h266 {
         use super::*;
 
         /// Test that H.264's profile-level-id parameter (single hex value) is not confused
@@ -3120,7 +3120,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
 
     /// Additional H.266 parsing and validation tests.
     /// Covers incomplete parameter handling and complete SDP integration scenarios.
-    mod h266_additional {
+    pub mod h266_additional {
         use super::*;
 
         /// Test that incomplete H.266 parameter sets do not create a composite ProfileTierLevel.
@@ -3198,7 +3198,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// Multi-codec integration tests.
     /// Verifies that multiple video codecs (H.264, H.266, VP8, VP9) can coexist
     /// in the same SDP without parameter conflicts or interference.
-    mod multi_codec_h266 {
+    pub mod multi_codec_h266 {
         use super::*;
 
         /// Test that H.264, H.266, and other video codecs can coexist in the same SDP
@@ -3265,7 +3265,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// H.266 serialization and edge case tests.
     /// Tests media attribute generation, empty parameter handling, extreme values,
     /// parameter ordering independence, DONL parameters, and invalid value handling.
-    mod h266_serialization {
+    pub mod h266_serialization {
         use super::*;
 
         /// Test that H.266 parameters are correctly serialized as media attributes,
@@ -3486,7 +3486,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// H.266 integration with RTCP feedback mechanisms.
     /// Tests H.266 behavior with multiple codecs and various RTCP feedback types
     /// including NACK, PLI, FIR, and transport-cc.
-    mod h266_integration {
+    pub mod h266_integration {
         use super::*;
 
         /// Test H.266 in SDP with multiple video codecs and feedback mechanisms.
@@ -3557,7 +3557,7 @@ f78dde68-7055-4e20-bb37-433803dd1ed1\r\n\
     /// Covers SDP round-trip serialization, incomplete parameter permutations,
     /// browser compatibility (Chrome profile-only mode), and validation of all
     /// standard H.266 level values (1.0 through 6.2).
-    mod h266_advanced {
+    pub mod h266_advanced {
         use super::*;
 
         /// Test H.266 SDP serialization maintains parameter integrity.

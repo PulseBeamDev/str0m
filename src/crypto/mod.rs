@@ -21,7 +21,7 @@ pub mod dtls {
 
 #[cfg(any(test, feature = "_internal_test_exports"))]
 #[allow(unused)]
-pub(crate) fn test_default_provider() -> &'static CryptoProvider {
+pub fn test_default_provider() -> &'static CryptoProvider {
     use std::sync::OnceLock;
     static TEST_PROVIDER: OnceLock<CryptoProvider> = OnceLock::new();
     TEST_PROVIDER.get_or_init(from_feature_flags)
@@ -60,7 +60,7 @@ pub fn from_feature_flags() -> CryptoProvider {
     );
 }
 
-mod finger;
+pub mod finger;
 pub use finger::Fingerprint;
 
 pub use str0m_proto::crypto::{CryptoError, DtlsError};

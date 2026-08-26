@@ -33,7 +33,7 @@ pub struct SdpApi<'a> {
 }
 
 impl<'a> SdpApi<'a> {
-    pub(crate) fn new(rtc: &'a mut Rtc) -> Self {
+    pub fn new(rtc: &'a mut Rtc) -> Self {
         SdpApi {
             rtc,
             changes: Changes::default(),
@@ -613,7 +613,7 @@ impl SdpPendingOffer {
 }
 
 #[derive(Default)]
-pub(crate) struct Changes(pub Vec<Change>);
+pub struct Changes(pub Vec<Change>);
 
 impl Changes {
     /// Details of the active ICE restart, if any.
@@ -632,7 +632,7 @@ impl Changes {
 
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum Change {
+pub enum Change {
     AddMedia(AddMedia),
     AddApp(Mid),
     AddChannel((ChannelId, ChannelConfig)),
@@ -641,7 +641,7 @@ pub(crate) enum Change {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AddMedia {
+pub struct AddMedia {
     pub mid: Mid,
     pub cname: String,
     pub msid: Msid,
@@ -1782,7 +1782,7 @@ impl Changes {
         })
     }
 
-    pub(crate) fn apply_to(&self, lines: &mut [MediaLine]) {
+    pub fn apply_to(&self, lines: &mut [MediaLine]) {
         for change in &self.0 {
             if let Change::Direction(mid, dir) = change {
                 if let Some(line) = lines.iter_mut().find(|l| l.mid() == *mid) {
@@ -1840,7 +1840,7 @@ impl Change {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use std::time::Instant;
 
     use sdp::RestrictionId;

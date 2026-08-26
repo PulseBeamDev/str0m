@@ -11,49 +11,49 @@ use super::format_params::FormatParams;
 use super::payload_params::{Claimed, PREFERED_RANGES, PayloadParams};
 
 /// Default payload type for PCMU (G.711 μ-law).
-pub(crate) const PT_PCMU: Pt = Pt::new_with_value(0);
+pub const PT_PCMU: Pt = Pt::new_with_value(0);
 
 /// Default payload type for PCMA (G.711 A-law).
-pub(crate) const PT_PCMA: Pt = Pt::new_with_value(8);
+pub const PT_PCMA: Pt = Pt::new_with_value(8);
 
 /// Default payload type for G722.
-pub(crate) const PT_G722: Pt = Pt::new_with_value(9);
+pub const PT_G722: Pt = Pt::new_with_value(9);
 
 /// Static payload type for Comfort Noise at 8000 Hz (RFC 3389).
-pub(crate) const PT_COMFORT_NOISE: Pt = Pt::new_with_value(13);
+pub const PT_COMFORT_NOISE: Pt = Pt::new_with_value(13);
 
 /// Default payload type for VP8.
-pub(crate) const PT_VP8: Pt = Pt::new_with_value(96);
+pub const PT_VP8: Pt = Pt::new_with_value(96);
 
 /// Default payload type for VP8 RTX.
-pub(crate) const PT_VP8_RTX: Pt = Pt::new_with_value(97);
+pub const PT_VP8_RTX: Pt = Pt::new_with_value(97);
 
 /// Default payload type for VP9 profile 0.
-pub(crate) const PT_VP9: Pt = Pt::new_with_value(98);
+pub const PT_VP9: Pt = Pt::new_with_value(98);
 
 /// Default payload type for VP9 profile 0 RTX.
-pub(crate) const PT_VP9_RTX: Pt = Pt::new_with_value(99);
+pub const PT_VP9_RTX: Pt = Pt::new_with_value(99);
 
 /// Default payload type for AV1.
-pub(crate) const PT_AV1: Pt = Pt::new_with_value(45);
+pub const PT_AV1: Pt = Pt::new_with_value(45);
 
 /// Default payload type for AV1 RTX.
-pub(crate) const PT_AV1_RTX: Pt = Pt::new_with_value(46);
+pub const PT_AV1_RTX: Pt = Pt::new_with_value(46);
 
 /// Default payload type for H265.
-pub(crate) const PT_H265: Pt = Pt::new_with_value(102);
+pub const PT_H265: Pt = Pt::new_with_value(102);
 
 /// Default payload type for H265 RTX.
-pub(crate) const PT_H265_RTX: Pt = Pt::new_with_value(103);
+pub const PT_H265_RTX: Pt = Pt::new_with_value(103);
 
 /// Default payload type for H266 (VVC).
-pub(crate) const PT_H266: Pt = Pt::new_with_value(104);
+pub const PT_H266: Pt = Pt::new_with_value(104);
 
 /// Default payload type for H266 RTX.
-pub(crate) const PT_H266_RTX: Pt = Pt::new_with_value(105);
+pub const PT_H266_RTX: Pt = Pt::new_with_value(105);
 
 /// Default payload type for Opus.
-pub(crate) const PT_OPUS: Pt = Pt::new_with_value(111);
+pub const PT_OPUS: Pt = Pt::new_with_value(111);
 
 /// Session config for all codecs.
 #[derive(Debug, Clone, Default)]
@@ -426,7 +426,7 @@ impl CodecConfig {
     }
 
     /// When we get remote payload parameters, we need to match differently depending on direction.
-    pub(crate) fn sdp_match_remote(
+    pub fn sdp_match_remote(
         &self,
         remote_params: PayloadParams,
         remote_dir: Direction,
@@ -449,7 +449,7 @@ impl CodecConfig {
         self.params.iter().find(move |p| f(p))
     }
 
-    pub(crate) fn all_for_kind(&self, kind: MediaKind) -> impl Iterator<Item = &PayloadParams> {
+    pub fn all_for_kind(&self, kind: MediaKind) -> impl Iterator<Item = &PayloadParams> {
         self.params.iter().filter(move |params| {
             if kind == MediaKind::Video {
                 params.spec.codec.is_video()
@@ -459,7 +459,7 @@ impl CodecConfig {
         })
     }
 
-    pub(crate) fn update_params(&mut self, remote_params: &[PayloadParams], remote_dir: Direction) {
+    pub fn update_params(&mut self, remote_params: &[PayloadParams], remote_dir: Direction) {
         // 0-128 of "claimed" PTs. I.e. PTs that we already allocated to something.
         let mut claimed: [bool; 128] = [false; 128];
 
@@ -540,7 +540,7 @@ impl CodecConfig {
         }
     }
 
-    pub(crate) fn has_pt(&self, pt: Pt) -> bool {
+    pub fn has_pt(&self, pt: Pt) -> bool {
         self.params.iter().any(|p| p.pt() == pt)
     }
 }
@@ -561,7 +561,7 @@ impl DerefMut for CodecConfig {
 
 impl CodecSpec {
     /// Get the standardized codec definition for a static RTP payload type.
-    pub(crate) fn from_static_pt(pt: Pt) -> Option<Self> {
+    pub fn from_static_pt(pt: Pt) -> Option<Self> {
         let (codec, clock_rate) = if pt == PT_PCMU {
             (Codec::PCMU, Frequency::EIGHT_KHZ)
         } else if pt == PT_PCMA {
@@ -586,7 +586,7 @@ impl CodecSpec {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use crate::packet::MediaKind;
     use crate::rtp_::Direction;
     use crate::rtp_::Frequency;
