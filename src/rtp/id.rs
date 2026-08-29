@@ -215,7 +215,7 @@ pub struct TwccSeq(u64);
 num_id!(TwccSeq, u64);
 
 impl SeqNo {
-    pub(crate) const MAX: SeqNo = SeqNo(u64::MAX);
+    pub const MAX: SeqNo = SeqNo(u64::MAX);
 
     /// Check if the `other` sequence number is directly following this.
     #[inline(always)]
@@ -235,7 +235,7 @@ impl SeqNo {
     }
 
     #[inline(always)]
-    pub(crate) fn is_max(&self) -> bool {
+    pub fn is_max(&self) -> bool {
         self.0 == Self::MAX.0
     }
 
@@ -355,7 +355,7 @@ impl Pt {
 ///
 /// In many cases they go hand-in-hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct MidRid(pub Mid, pub Option<Rid>);
+pub struct MidRid(pub Mid, pub Option<Rid>);
 
 impl MidRid {
     #[inline(always)]

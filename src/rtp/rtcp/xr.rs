@@ -119,7 +119,7 @@ impl RtcpPacket for ExtendedReport {
 }
 
 impl ReportBlock {
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         match self {
             Self::Rrtr(_) => Rrtr::len(),
             Self::Dlrr(v) => v.len(),

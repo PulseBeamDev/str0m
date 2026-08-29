@@ -60,7 +60,7 @@ impl WordSized for ReceptionReport {
 }
 
 impl ReceptionReport {
-    pub(crate) fn write_to(&self, buf: &mut [u8]) {
+    pub fn write_to(&self, buf: &mut [u8]) {
         buf[0..4].copy_from_slice(&self.ssrc.to_be_bytes());
         buf[4..8].copy_from_slice(&self.packets_lost.to_be_bytes());
         buf[4] = self.fraction_lost;

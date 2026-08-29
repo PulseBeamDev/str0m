@@ -1,49 +1,49 @@
 #![allow(clippy::unusual_byte_groupings)]
 
-mod header;
+pub mod header;
 use std::collections::VecDeque;
 
 pub use header::{RtcpHeader, RtcpType};
 
-mod list;
+pub mod list;
 pub use list::ReportList;
 use list::private::WordSized;
 
-mod fmt;
+pub mod fmt;
 pub use fmt::{FeedbackMessageType, PayloadType, TransportType};
 
-mod sr;
+pub mod sr;
 pub use sr::{SenderInfo, SenderReport};
 
-mod rr;
+pub mod rr;
 pub use rr::{ReceiverReport, ReceptionReport};
 
-mod xr;
+pub mod xr;
 pub use xr::{Dlrr, DlrrItem, ExtendedReport, ReportBlock, Rrtr};
 
-mod sdes;
+pub mod sdes;
 pub use sdes::{Descriptions, Sdes, SdesType};
 
-mod bb;
+pub mod bb;
 pub use bb::Goodbye;
 
-mod nack;
+pub mod nack;
 pub use nack::{Nack, NackEntry};
 
-mod pli;
+pub mod pli;
 pub use pli::Pli;
 
-mod fir;
+pub mod fir;
 pub use fir::{Fir, FirEntry};
 
-mod twcc;
+pub mod twcc;
 pub use twcc::{Twcc, TwccPacketId, TwccRecvRegister, TwccSendRecord, TwccSendRegister};
 
-mod rtcpfb;
+pub mod rtcpfb;
 pub use rtcpfb::RtcpFb;
 
-mod psfbapp;
-mod remb;
+pub mod psfbapp;
+pub mod remb;
 pub use psfbapp::AppSpecificFeedback;
 pub use remb::Remb;
 
@@ -96,7 +96,7 @@ pub enum Rtcp {
 }
 
 impl Rtcp {
-    pub(crate) fn read_packet(buf: &[u8], feedback: &mut VecDeque<Rtcp>) {
+    pub fn read_packet(buf: &[u8], feedback: &mut VecDeque<Rtcp>) {
         let mut buf = buf;
         loop {
             if buf.is_empty() {
@@ -138,7 +138,7 @@ impl Rtcp {
         }
     }
 
-    pub(crate) fn write_packet(
+    pub fn write_packet(
         feedback: &mut VecDeque<Rtcp>,
         buf: &mut [u8],
         mut output: impl FnMut(Rtcp),
@@ -480,7 +480,7 @@ fn pad_bytes_to_word(n: usize) -> usize {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use std::time::{Duration, SystemTime};
 
     use crate::rtp_::MediaTime;

@@ -435,7 +435,7 @@ impl From<Duration> for MediaTime {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
 
     #[test]

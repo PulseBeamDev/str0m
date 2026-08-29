@@ -75,7 +75,7 @@ pub enum Extension {
 // The form must be the two-byte variety for all of them.
 #[repr(u16)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum ExtensionsForm {
+pub enum ExtensionsForm {
     // See RFC 8285 Section 4.2
     // ID Range: 1..=14
     // Length Range: 1..=16
@@ -92,16 +92,16 @@ pub const MAX_ID_ONE_BYTE_FORM: u8 = 14;
 pub const MAX_ID: u8 = 16;
 
 impl ExtensionsForm {
-    pub(crate) fn as_u16(self) -> u16 {
+    pub fn as_u16(self) -> u16 {
         self as u16
     }
 
-    pub(crate) fn serialize(self) -> [u8; 2] {
+    pub fn serialize(self) -> [u8; 2] {
         // App bits set to 0
         self.as_u16().to_be_bytes()
     }
 
-    pub(crate) fn parse(bytes: [u8; 2]) -> Option<Self> {
+    pub fn parse(bytes: [u8; 2]) -> Option<Self> {
         let serialized = u16::from_be_bytes(bytes);
         if serialized == ExtensionsForm::OneByte.as_u16() {
             Some(ExtensionsForm::OneByte)
@@ -234,7 +234,7 @@ impl Extension {
     /// Parses an extension from a URI. This only happens for incoming SDP OFFER/ANSWER
     /// while the corresponding Extension with a potential ExtensionSerializer is
     /// in Rtc::session.
-    pub(crate) fn from_sdp_uri(uri: &str) -> Self {
+    pub fn from_sdp_uri(uri: &str) -> Self {
         for (t, spec) in EXT_URI.iter() {
             if *spec == uri {
                 return t.clone();
@@ -264,7 +264,7 @@ impl Extension {
         "unknown"
     }
 
-    pub(crate) fn is_serialized(&self) -> bool {
+    pub fn is_serialized(&self) -> bool {
         if let Self::UnknownUri(_, s) = self {
             // Check if this Arc contains the SdpUnknownUri.
             let is_sdp = (s as &(dyn Any + 'static))
@@ -382,7 +382,7 @@ impl ExtensionMap {
         exts
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         for i in &mut self.0 {
             *i = None;
         }
@@ -457,7 +457,7 @@ impl ExtensionMap {
         self.iter_by_media_type(false)
     }
 
-    pub(crate) fn cloned_with_type(&self, audio: bool) -> Self {
+    pub fn cloned_with_type(&self, audio: bool) -> Self {
         let mut x = ExtensionMap::empty();
         for (id, ext) in self.iter_by_media_type(audio) {
             x.set(id, ext.clone());
@@ -466,7 +466,7 @@ impl ExtensionMap {
     }
 
     // https://tools.ietf.org/html/rfc5285
-    pub(crate) fn parse(
+    pub fn parse(
         &self,
         mut buf: &[u8],
         form: ExtensionsForm,
@@ -525,7 +525,7 @@ impl ExtensionMap {
         }
     }
 
-    pub(crate) fn form(&self, ev: &ExtensionValues) -> ExtensionsForm {
+    pub fn form(&self, ev: &ExtensionValues) -> ExtensionsForm {
         if self
             .iter()
             .any(|(id, ext)| id > MAX_ID_ONE_BYTE_FORM || ext.requires_two_byte_form(ev))
@@ -536,7 +536,7 @@ impl ExtensionMap {
         }
     }
 
-    pub(crate) fn write_to(
+    pub fn write_to(
         &self,
         ext_buf: &mut [u8],
         ev: &ExtensionValues,
@@ -570,7 +570,7 @@ impl ExtensionMap {
         orig_len - b.len()
     }
 
-    pub(crate) fn remap(&mut self, remote_exts: &[(u8, &Extension)]) {
+    pub fn remap(&mut self, remote_exts: &[(u8, &Extension)]) {
         // Match remote numbers and lock down those we see for the first time.
         for (id, ext) in remote_exts {
             self.swap(*id, ext);
@@ -621,7 +621,7 @@ impl ExtensionMap {
 }
 
 impl Extension {
-    pub(crate) fn write_to(&self, buf: &mut [u8], ev: &ExtensionValues) -> Option<usize> {
+    pub fn write_to(&self, buf: &mut [u8], ev: &ExtensionValues) -> Option<usize> {
         use Extension::*;
         match self {
             AbsoluteSendTime => {
@@ -744,7 +744,7 @@ impl Extension {
         }
     }
 
-    pub(crate) fn parse_value(&self, buf: &[u8], ev: &mut ExtensionValues) -> Option<()> {
+    pub fn parse_value(&self, buf: &[u8], ev: &mut ExtensionValues) -> Option<()> {
         use Extension::*;
         match self {
             // 3
@@ -923,7 +923,7 @@ pub struct ExtensionValues {
     pub user_values: UserExtensionValues,
 }
 impl ExtensionValues {
-    pub(crate) fn update_absolute_send_time(&mut self, now: Instant) {
+    pub fn update_absolute_send_time(&mut self, now: Instant) {
         let Some(v) = self.abs_send_time else {
             return;
         };
@@ -1275,7 +1275,7 @@ impl PartialEq for Extension {
 impl Eq for Extension {}
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
 
     #[test]

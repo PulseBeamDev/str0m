@@ -967,7 +967,7 @@ fn error_details(header: &RtpHeader, srtp_index: u64) -> String {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
 
     #[test]
@@ -1030,7 +1030,7 @@ mod test {
         );
     }
 
-    mod test_aes128_cm_sha1_80 {
+    pub mod test_aes128_cm_sha1_80 {
         use super::*;
 
         const MAT: [u8; 60] = [
@@ -1087,7 +1087,7 @@ mod test {
         }
     }
 
-    mod test_aead_aes_128_gcm {
+    pub mod test_aead_aes_128_gcm {
         use crate::crypto::AeadAes128Gcm;
         use crate::rtp_::ExtensionMap;
 
@@ -1095,7 +1095,7 @@ mod test {
 
         const TAG_LEN: usize = AeadAes128Gcm::TAG_LEN;
 
-        mod rfc7714 {
+        pub mod rfc7714 {
             // Test vectors from RFC7714
 
             // Session Key (RTP and RTCP)
@@ -1313,7 +1313,7 @@ mod test {
         }
     }
 
-    mod test_aead_aes_256_gcm {
+    pub mod test_aead_aes_256_gcm {
         use crate::crypto::AeadAes256Gcm;
         use crate::rtp_::ExtensionMap;
 
@@ -1321,7 +1321,7 @@ mod test {
 
         const TAG_LEN: usize = AeadAes256Gcm::TAG_LEN;
 
-        mod rfc7714 {
+        pub mod rfc7714 {
             // Test vectors from RFC7714
 
             // Session Key (RTP and RTCP)

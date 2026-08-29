@@ -138,7 +138,7 @@ impl FormatParams {
         p
     }
 
-    pub(crate) fn set_param(&mut self, param: &FormatParam) {
+    pub fn set_param(&mut self, param: &FormatParam) {
         use FormatParam::*;
         match param {
             MinPTime(v) => self.min_p_time = Some(*v),
@@ -161,7 +161,7 @@ impl FormatParams {
         }
     }
 
-    pub(crate) fn to_format_param(self) -> Vec<FormatParam> {
+    pub fn to_format_param(self) -> Vec<FormatParam> {
         use FormatParam::*;
         let mut r = Vec::with_capacity(5);
 
@@ -230,7 +230,7 @@ impl fmt::Display for FormatParams {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
 
     #[test]

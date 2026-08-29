@@ -84,7 +84,7 @@ impl<'a> TryFrom<&'a [u8]> for AppSpecificFeedback {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]

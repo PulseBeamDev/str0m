@@ -178,7 +178,7 @@ impl<'a> TryFrom<&'a [u8]> for Remb {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]

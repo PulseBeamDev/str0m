@@ -3,16 +3,16 @@ use std::ops::Deref;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
-mod data;
+pub mod data;
 #[cfg(test)]
-pub(crate) use data::RtpMap;
-pub(crate) use data::{FormatParam, Sdp, Session, SessionAttribute, Setup};
-pub(crate) use data::{MediaAttribute, MediaLine, MediaType, Msid, Proto};
-pub(crate) use data::{RestrictionId, Simulcast, SimulcastGroups, SimulcastLayer};
+pub use data::RtpMap;
+pub use data::{FormatParam, Sdp, Session, SessionAttribute, Setup};
+pub use data::{MediaAttribute, MediaLine, MediaType, Msid, Proto};
+pub use data::{RestrictionId, Simulcast, SimulcastGroups, SimulcastLayer};
 
-mod parser;
+pub mod parser;
 
-mod error;
+pub mod error;
 pub use error::SdpError;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -32,7 +32,7 @@ impl SdpOffer {
     }
 
     #[cfg(test)]
-    pub(crate) fn into_inner(self) -> Sdp {
+    pub fn into_inner(self) -> Sdp {
         self.0
     }
 }
@@ -148,7 +148,7 @@ sdp_ser!(SdpOffer, "Offer", "offer");
 sdp_ser!(SdpAnswer, "Answer", "answer");
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use crate::VERSION;
     use crate::rtp_::SessionId;
 

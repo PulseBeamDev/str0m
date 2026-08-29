@@ -12,9 +12,9 @@
 //! The direct API is a lower level API which typically can't be mixed with the SDP API. If you make
 //! changes directly to the session, the remote side would not be aware of them unless you construct
 //! some "other way" keeping the two peers in sync.
-mod sdp;
-pub(crate) use sdp::AddMedia;
+pub mod sdp;
+pub use sdp::AddMedia;
 pub use sdp::{SdpAnswer, SdpApi, SdpOffer, SdpPendingOffer};
 
-mod direct;
+pub mod direct;
 pub use direct::DirectApi;

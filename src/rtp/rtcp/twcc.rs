@@ -1125,7 +1125,7 @@ impl TwccSendRecord {
     ///
     /// This is used by unit tests for BWE/probing, allowing them to model received vs lost packets
     /// without constructing full RTCP TWCC reports.
-    pub(crate) fn test_new(
+    pub fn test_new(
         packet_id: TwccPacketId,
         local_send_time: Instant,
         size: usize,
@@ -1478,7 +1478,7 @@ impl fmt::Debug for Twcc {
 
 #[allow(clippy::assign_op_pattern)]
 #[cfg(test)]
-mod test {
+pub mod test {
     use std::time::Duration;
 
     use super::*;
